@@ -6,7 +6,8 @@ Mod de cliente para **Fabric** (Minecraft **1.21.11**) que automatiza el encanta
 
 - Configura **casco, pechera, pantalones, botas y espada** de netherite, cada una con sus propios encantamientos y niveles.
 - Detecta en tu inventario las piezas, los **libros de un solo encantamiento** y la XP, y te muestra un **contador** de lo que tienes frente a lo que necesitas.
-- Si falta algo, **no hace nada** y te dice exactamente qué falta.
+- Antes de empezar solo comprueba que haya **piezas** y **libros**. Si hay libros para parte de las unidades, encanta esas y avisa de las que faltan.
+- La **XP se comprueba por unidad**, justo antes de empezar cada una (la suma de sus pasos), no en total.
 - Solo funciona con el **yunque abierto**. En cualquier otra pantalla no actúa.
 - Aplica los libros pieza a pieza, esperando la respuesta del servidor entre pasos.
 
@@ -15,7 +16,7 @@ Mod de cliente para **Fabric** (Minecraft **1.21.11**) que automatiza el encanta
 - **Cantidad:** encanta varias piezas del mismo tipo de una vez (opcional).
 - **Combinar libros:** con *Sí* busca el orden más barato en XP, juntando libros entre sí y sin pasar de 39 niveles por paso. Con *No* aplica un libro tras otro en el orden de tu lista.
 - **Retardo entre clics:** configurable en ticks (20 ticks = 1 segundo). Recomendado: 6 a 10.
-- **Esperar XP:** si te quedas sin niveles, espera a tener los suficientes en vez de parar.
+- **Esperar XP:** con *Sí*, si no tienes niveles para la siguiente unidad, espera a tenerlos y sigue sola. Con *No* se detiene y te dice cuántas encantó y cuántos niveles faltan para la siguiente.
 - **Coste por paso:** el menú muestra los niveles que costará cada paso y el total antes de empezar.
 
 ## Uso

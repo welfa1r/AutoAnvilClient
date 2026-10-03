@@ -34,6 +34,11 @@ public final class AnvilConfig {
      * en el orden de la lista de encantamientos.
      */
     public boolean combineBooks = true;
+    /**
+     * Sí: si no hay niveles para la siguiente unidad, espera a tenerlos y sigue sola.
+     * No: se detiene y dice cuántas se encantaron y cuántos niveles faltan.
+     */
+    public boolean waitForXp = false;
     /** Nombre antiguo de {@link #combineBooks}; solo se lee para migrar (Gson no escribe los null). */
     private Boolean saveXp;
     public Map<String, PieceConfig> pieces = new LinkedHashMap<>();
@@ -81,6 +86,7 @@ public final class AnvilConfig {
         AnvilConfig c = new AnvilConfig();
         c.clickDelayTicks = clickDelayTicks;
         c.combineBooks = combineBooks;
+        c.waitForXp = waitForXp;
         pieces.forEach((k, v) -> c.pieces.put(k, v.copy()));
         return c;
     }

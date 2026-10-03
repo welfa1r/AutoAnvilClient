@@ -5,6 +5,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.inventory.AnvilScreen;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.world.inventory.AnvilMenu;
 import net.minecraft.world.inventory.ClickType;
 import net.minecraft.world.item.Item;
@@ -25,6 +26,8 @@ final class AnvilExecutor {
     private final AnvilPlanner.Plan plan;
     private final int containerId;
     private final int delay;
+    /** Esperar XP: Sí -> sin niveles se queda esperando en vez de parar. */
+    private final boolean waitForXp;
     /** Nodo del plan -> casilla del menú donde está ahora. */
     private final Map<Integer, Integer> slotOf;
 
@@ -35,12 +38,14 @@ final class AnvilExecutor {
     private int waitTicks;
     private List<Integer> emptyBeforeTake = List.of();
     private int piecesDone;
+    private boolean waitingXp;
     private boolean finished;
 
-    AnvilExecutor(AnvilPlanner.Plan plan, int containerId, int delay) {
+    AnvilExecutor(AnvilPlanner.Plan plan, int containerId, int delay, boolean waitForXp) {
         this.plan = plan;
         this.containerId = containerId;
         this.delay = delay;
+        this.waitForXp = waitForXp;
         this.slotOf = new HashMap<>(plan.initialSlots());
     }
 
@@ -65,16 +70,11 @@ final class AnvilExecutor {
         AnvilPlanner.Step step = piecePlan.steps().get(stepIndex);
         switch (phase) {
             case PICK_LEFT -> {
-                if (stepIndex == 0 && !player.hasInfiniteMaterials() && piecePlan.totalCost() > player.experienceLevel) {
-                    stop(mc, menu, "XP insuficiente para la siguiente pieza (" + label(piecePlan) + "): necesita "
-                            + piecePlan.totalCost() + " niveles y tienes " + player.experienceLevel + ".");
-                    return;
-                }
-                if (!player.hasInfiniteMaterials() && step.cost() > player.experienceLevel) {
-                    stop(mc, menu, "XP insuficiente: el siguiente paso cuesta " + step.cost() + " niveles y tienes "
-                            + player.experienceLevel + ".");
-                    return;
-                }
+                // Antes de cada unidad: niveles para todos sus pasos. Dentro de la unidad: para el siguiente paso.
+                boolean enoughXp = stepIndex == 0
+                        ? hasXp(mc, menu, player, piecePlan.totalCost(), "la siguiente (" + label(piecePlan) + ")")
+                        : hasXp(mc, menu, player, step.cost(), "el siguiente paso");
+                if (!enoughXp) return;
                 pick(mc, menu, step.left(), Phase.DROP_LEFT);
             }
             case DROP_LEFT -> drop(mc, menu, step.left(), AnvilMenu.INPUT_SLOT, Phase.PICK_RIGHT);
@@ -134,10 +134,7 @@ final class AnvilExecutor {
             }
             return;
         }
-        if (!player.hasInfiniteMaterials() && cost > player.experienceLevel) {
-            stop(mc, menu, "XP insuficiente: este paso cuesta " + cost + " niveles y tienes " + player.experienceLevel + ".");
-            return;
-        }
+        if (!hasXp(mc, menu, player, cost, "este paso")) return;
         if (cost != step.cost()) {
             AutoAnvilClient.say(Component.literal("Aviso: este paso cuesta " + cost + " niveles (previsto "
                     + step.cost() + ").").withStyle(ChatFormatting.YELLOW));
@@ -175,8 +172,33 @@ final class AnvilExecutor {
                 .withStyle(ChatFormatting.GREEN));
         stepIndex = 0;
         if (++pieceIndex >= plan.pieces().size()) {
-            finish(Component.literal("Todo encantado: " + piecesDone + " pieza(s).").withStyle(ChatFormatting.GREEN));
+            finish(Component.literal("Todo encantado: " + piecesDone + " pieza(s)." + booksNote())
+                    .withStyle(ChatFormatting.GREEN));
         }
+    }
+
+    /**
+     * true si hay {@code need} niveles. Si no, con Esperar XP se queda esperando (avisa una vez y sigue sola
+     * cuando los tenga); sin Esperar XP se detiene con el resumen.
+     */
+    private boolean hasXp(Minecraft mc, AnvilMenu menu, LocalPlayer player, int need, String what) {
+        int level = player.experienceLevel;
+        if (player.hasInfiniteMaterials() || need <= level) {
+            if (waitingXp) {
+                waitingXp = false;
+                AutoAnvilClient.say(Component.literal("Ya tienes " + level + " niveles: continúa.").withStyle(ChatFormatting.GREEN));
+            }
+            return true;
+        }
+        String detail = "Para " + what + " faltan " + (need - level) + " niveles (tienes " + level + ", necesita " + need + ").";
+        if (!waitForXp) {
+            stopWithSummary(mc, menu, Component.literal(progress() + " " + detail + booksNote()).withStyle(ChatFormatting.RED));
+        } else if (!waitingXp) {
+            waitingXp = true;
+            AutoAnvilClient.say(Component.literal("Esperando XP. " + progress() + " " + detail
+                    + " Continúa en cuanto los tengas; cierra el yunque para cancelar.").withStyle(ChatFormatting.YELLOW));
+        }
+        return false;
     }
 
     private static String label(AnvilPlanner.PiecePlan p) {
@@ -184,11 +206,21 @@ final class AnvilExecutor {
     }
 
     private String progress() {
-        return "Piezas terminadas: " + piecesDone + " de " + plan.pieces().size() + ".";
+        return "Encantadas " + piecesDone + " de " + plan.pieces().size() + ".";
+    }
+
+    /** " Faltan libros para otras N unidades." si se saltó alguna por falta de libros. */
+    private String booksNote() {
+        int n = plan.withoutBooks();
+        return n == 0 ? "" : " Faltan libros para otra" + (n == 1 ? " unidad" : "s " + n + " unidades") + ".";
     }
 
     /** Se detiene, devuelve al inventario lo que pueda y dice cuántas piezas se hicieron. */
     private void stop(Minecraft mc, AnvilMenu menu, String reason) {
+        stopWithSummary(mc, menu, Component.literal(reason + " Detenido. " + progress()).withStyle(ChatFormatting.RED));
+    }
+
+    private void stopWithSummary(Minecraft mc, AnvilMenu menu, Component summary) {
         // Devolver al inventario lo que quede en el cursor o en las casillas de entrada.
         if (!menu.getCarried().isEmpty()) {
             List<Integer> empty = emptyInventorySlots(menu);
@@ -197,10 +229,14 @@ final class AnvilExecutor {
         for (int slot : new int[]{AnvilMenu.INPUT_SLOT, AnvilMenu.ADDITIONAL_SLOT}) {
             if (menu.getSlot(slot).hasItem()) click(mc, menu, slot, ClickType.QUICK_MOVE);
         }
-        String leftover = !menu.getCarried().isEmpty() || menu.getSlot(AnvilMenu.INPUT_SLOT).hasItem()
-                || menu.getSlot(AnvilMenu.ADDITIONAL_SLOT).hasItem()
-                ? " Quedan objetos en el yunque o el cursor: haz hueco y recógelos." : "";
-        finish(Component.literal(reason + " Detenido. " + progress() + leftover).withStyle(ChatFormatting.RED));
+        boolean leftover = !menu.getCarried().isEmpty() || menu.getSlot(AnvilMenu.INPUT_SLOT).hasItem()
+                || menu.getSlot(AnvilMenu.ADDITIONAL_SLOT).hasItem();
+        MutableComponent message = summary.copy();
+        if (leftover) {
+            message.append(Component.literal(" Quedan objetos en el yunque o el cursor: haz hueco y recógelos.")
+                    .withStyle(ChatFormatting.RED));
+        }
+        finish(message);
     }
 
     private void finish(Component message) {

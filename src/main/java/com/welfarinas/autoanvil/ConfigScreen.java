@@ -53,6 +53,8 @@ public class ConfigScreen extends Screen {
     /** Evita que el responder reaccione a los cambios de texto hechos por código. */
     private boolean updatingCountBox;
     private int gridBottom = GRID_TOP;
+    /** Y de la fila de botones de abajo más alta (las líneas del contador terminan encima). */
+    private int buttonsTop;
     private List<Component> counterLines = List.of();
 
     public ConfigScreen(Screen parent) {
@@ -176,13 +178,18 @@ public class ConfigScreen extends Screen {
         }
         counterLines = buildCounters(pc);
 
-        // Combinar libros / retardo / guardar / cancelar.
+        // Combinar libros / esperar XP / retardo / guardar / cancelar. Si no caben en una fila, guardar y cancelar
+        // van en otra debajo.
         int bottom = height - 26;
-        x = width / 2 - (130 + 100 + 2 * 80 + 3 * GAP) / 2;
+        int optionsWidth = 130 + GAP + 100 + GAP + 100;
+        int actionsWidth = 2 * 80 + GAP;
+        boolean oneRow = optionsWidth + GAP + actionsWidth <= width - 8;
+        buttonsTop = oneRow ? bottom : bottom - 24;
+        x = oneRow ? (width - optionsWidth - GAP - actionsWidth) / 2 : (width - optionsWidth) / 2;
         addRenderableWidget(Button.builder(Component.literal("Combinar libros: " + (working.combineBooks ? "Sí" : "No")), b -> {
             working.combineBooks = !working.combineBooks;
             rebuildWidgets();
-        }).bounds(x, bottom, 130, 20)
+        }).bounds(x, buttonsTop, 130, 20)
                 .tooltip(Tooltip.create(Component.literal(
                         "Sí: busca el orden más barato en niveles. Puede juntar libros entre sí antes de "
                         + "aplicarlos (p. ej. Irrompibilidad + Reparación) y nunca pasa de 39 niveles por paso.\n\n"
@@ -191,15 +198,26 @@ public class ConfigScreen extends Screen {
                         + "libros, algún paso puede pasar de 39 niveles.")))
                 .build());
         x += 130 + GAP;
+        addRenderableWidget(Button.builder(Component.literal("Esperar XP: " + (working.waitForXp ? "Sí" : "No")), b -> {
+            working.waitForXp = !working.waitForXp;
+            rebuildWidgets();
+        }).bounds(x, buttonsTop, 100, 20)
+                .tooltip(Tooltip.create(Component.literal(
+                        "La XP se comprueba antes de cada unidad (la suma de sus pasos), no en total.\n\n"
+                        + "Sí: si no tienes niveles para la siguiente, espera a tenerlos y continúa sola. "
+                        + "Cierra el yunque para cancelar.\n\n"
+                        + "No: se detiene y dice cuántas se encantaron y cuántos niveles faltan para la siguiente.")))
+                .build());
+        x += 100 + GAP;
         addRenderableWidget(Button.builder(Component.literal("Retardo: " + working.clickDelayTicks + " ticks"), b -> {
             working.clickDelayTicks = working.clickDelayTicks >= AnvilConfig.MAX_DELAY
                     ? AnvilConfig.MIN_DELAY : working.clickDelayTicks + 1;
             rebuildWidgets();
-        }).bounds(x, bottom, 100, 20)
+        }).bounds(x, buttonsTop, 100, 20)
                 .tooltip(Tooltip.create(Component.literal("Ticks entre clics en el yunque (1 tick = 50 ms). "
                         + "Ahora: " + working.clickDelayTicks * 50 + " ms.")))
                 .build());
-        x += 100 + GAP;
+        x = oneRow ? x + 100 + GAP : (width - actionsWidth) / 2;
         addRenderableWidget(Button.builder(Component.literal("Guardar"), b -> {
             normalizeCount();
             AnvilConfig.set(working);
@@ -257,6 +275,11 @@ public class ConfigScreen extends Screen {
             if (c.kind() == AnvilPlanner.Kind.PIECE) continue; // ya va en pieceCounter
             line.append("   ").append(c.formatWithMissing());
         }
+        // XP por unidad (lo que se exige antes de cada una); el total va en gris, solo como dato.
+        List<AnvilPlanner.PiecePlan> units = own.unitsOf(selected);
+        if (!own.creative() && !units.isEmpty()) {
+            line.append("   ").append(AnvilPlanner.describeXp(units, minecraft.player.experienceLevel));
+        }
         if (pc.enchantments.isEmpty()) {
             line.append(Component.literal("   Sin encantamientos elegidos: no hacen falta libros ni XP.")
                     .withStyle(ChatFormatting.GRAY));
@@ -267,15 +290,17 @@ public class ConfigScreen extends Screen {
         Component none = stock == null ? null : stock.noneProblem();
         own.problems().stream().filter(p -> p != none)
                 .forEach(p -> lines.add(Component.empty().append(p).withStyle(ChatFormatting.RED)));
+        own.warnings().forEach(w -> lines.add(Component.empty().append(w).withStyle(ChatFormatting.YELLOW)));
 
         boolean othersActive = false;
         for (Piece piece : Piece.values()) {
             AnvilConfig.PieceConfig other = working.piece(piece);
             if (piece != selected && other.enabled && !other.enchantments.isEmpty()) othersActive = true;
         }
-        if (othersActive) lines.add(totalLine(AnvilPlanner.plan(minecraft.player, inventory, working)));
+        if (othersActive) {
+            lines.add(totalLine(AnvilPlanner.plan(minecraft.player, inventory, working), minecraft.player.experienceLevel));
+        }
 
-        List<AnvilPlanner.PiecePlan> units = own.unitsOf(selected);
         if (!units.isEmpty()) {
             List<Component> stepLines = AnvilPlanner.describeSteps(units, own.creative());
             lines.add(Component.literal(working.combineBooks ? "Pasos (Combinar libros): " : "Pasos (simple): ")
@@ -314,11 +339,10 @@ public class ConfigScreen extends Screen {
         return c;
     }
 
-    /** "Total de todas las piezas: ..." con lo que falta (o "todo listo") y la XP de todas las piezas activas. */
-    private static Component totalLine(AnvilPlanner.Result all) {
+    /** "Total de todas las piezas: ..." con lo que falta (o "todo listo") y la XP por unidad de las piezas activas. */
+    private static Component totalLine(AnvilPlanner.Result all, int level) {
         MutableComponent line = Component.literal("Total de todas las piezas: ").withStyle(ChatFormatting.GOLD);
-        List<AnvilPlanner.Count> missing = all.missing().stream()
-                .filter(c -> c.kind() != AnvilPlanner.Kind.XP).toList();
+        List<AnvilPlanner.Count> missing = all.missing();
         if (missing.isEmpty()) {
             line.append(Component.literal("piezas y libros ✔").withStyle(ChatFormatting.GREEN));
         } else {
@@ -330,8 +354,7 @@ public class ConfigScreen extends Screen {
                         .append(c.name());
             }
         }
-        all.counts().stream().filter(c -> c.kind() == AnvilPlanner.Kind.XP).findFirst()
-                .ifPresent(xp -> line.append("   ").append(xp.formatWithMissing()));
+        if (!all.creative() && !all.units().isEmpty()) line.append("   ").append(AnvilPlanner.describeXp(all.units(), level));
         if (!all.problems().isEmpty()) {
             int n = all.problems().size();
             line.append(Component.literal("   + " + n + (n == 1 ? " aviso" : " avisos") + " (míralos en cada pestaña)")
@@ -552,7 +575,7 @@ public class ConfigScreen extends Screen {
                     width / 2, GRID_TOP + 6, 0xFFFF5555);
         }
         boolean hasStatus = !status.getString().isEmpty();
-        int maxY = height - 28 - (hasStatus ? 12 : 0) - font.lineHeight;
+        int maxY = buttonsTop - 2 - (hasStatus ? 12 : 0) - font.lineHeight;
         int y = gridBottom + 4;
         outer:
         for (Component line : counterLines) {
@@ -562,7 +585,7 @@ public class ConfigScreen extends Screen {
                 y += font.lineHeight + 1;
             }
         }
-        if (hasStatus) graphics.drawCenteredString(font, status, width / 2, height - 38, 0xFFFFFF55);
+        if (hasStatus) graphics.drawCenteredString(font, status, width / 2, buttonsTop - 12, 0xFFFFFF55);
     }
 
     @Override

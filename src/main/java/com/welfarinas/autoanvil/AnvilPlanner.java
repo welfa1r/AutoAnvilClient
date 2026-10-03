@@ -24,6 +24,7 @@ import java.util.Deque;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
@@ -35,7 +36,6 @@ import java.util.Optional;
 final class AnvilPlanner {
     static final int TOO_EXPENSIVE = 40;
     static final int FIRST_INVENTORY_SLOT = AnvilMenu.RESULT_SLOT + 1;
-    static final String XP_KEY = "xp";
 
     /** Un uso del yunque: {@code left} en la casilla 0, {@code right} en la 1; produce el nodo {@code result}. */
     record Step(int left, int right, int result, int cost, boolean resultIsBook, Component label) {}
@@ -43,9 +43,10 @@ final class AnvilPlanner {
     /** Una unidad de pieza: {@code index} va de 1 a la cantidad configurada. */
     record PiecePlan(Piece piece, int index, int count, List<Step> steps, int totalCost) {}
 
-    record Plan(List<PiecePlan> pieces, Map<Integer, Integer> initialSlots, int totalCost) {}
+    /** {@code withoutBooks}: unidades que se saltan porque no hay libros para ellas. */
+    record Plan(List<PiecePlan> pieces, Map<Integer, Integer> initialSlots, int totalCost, int withoutBooks) {}
 
-    enum Kind { PIECE, BOOK, XP }
+    enum Kind { PIECE, BOOK }
 
     /** Detectado frente a necesario, p. ej. "Espadas: 3/4". */
     record Count(Kind kind, String key, Component name, int have, int need) {
@@ -69,11 +70,13 @@ final class AnvilPlanner {
     }
 
     /**
-     * {@code plan} es null si falta algo, hay problemas o no hay nada que hacer.
+     * {@code plan} es null si faltan piezas, no hay libros para ninguna unidad, hay problemas o no hay nada que hacer.
+     * La XP no se comprueba aquí: se mira por unidad justo antes de empezar cada una.
      * {@code units} tiene el plan de cada unidad (aunque falten objetos) para mostrar los pasos y su coste.
+     * {@code warnings} son avisos que no impiden empezar (p. ej. faltan libros para algunas unidades).
      */
     record Result(Plan plan, List<Count> counts, List<PiecePlan> units, List<Component> problems,
-                  List<Component> info, boolean creative, Map<Piece, Stock> stock) {
+                  List<Component> warnings, List<Component> info, boolean creative, Map<Piece, Stock> stock) {
         List<Count> missing() {
             return counts.stream().filter(c -> !c.ok()).toList();
         }
@@ -150,7 +153,7 @@ final class AnvilPlanner {
         List<PiecePlan> units = new ArrayList<>();
         Map<Piece, Stock> stock = new LinkedHashMap<>();
         int[] nextNode = {0};
-        long xpNeeded = 0;
+        int withoutBooks = 0;
         boolean combineBooks = config.combineBooks;
 
         for (Piece piece : Piece.values()) {
@@ -223,6 +226,7 @@ final class AnvilPlanner {
                 List<Target> needed = candidate != null ? candidate.needed() : targets;
                 int itemPen = candidate != null ? repairCost(candidate.inv().stack()) : 0;
                 boolean complete = candidate != null;
+                boolean missingBook = false;
 
                 int n = needed.size();
                 List<Book> chosen = new ArrayList<>();
@@ -235,7 +239,10 @@ final class AnvilPlanner {
                     bookNames.putIfAbsent(key, Enchantment.getFullname(t.holder(), t.level()));
                     Deque<Book> available = books.get(key);
                     Book book = available == null ? null : available.poll();
-                    if (book == null) complete = false;
+                    if (book == null) {
+                        complete = false;
+                        missingBook = true;
+                    }
                     chosen.add(book);
                     bookPen[b] = book == null ? 0 : book.repairCost();
                     // Libro en la casilla derecha: coste de yunque a la mitad (mínimo 1) por nivel resultante.
@@ -249,6 +256,7 @@ final class AnvilPlanner {
                                 + ": no hay orden posible sin llegar a 40 niveles en un paso (penalización de yunque muy alta)"));
                         reportedTooExpensive = true;
                     }
+                    giveBack(books, needed, chosen);
                     continue;
                 }
 
@@ -262,7 +270,6 @@ final class AnvilPlanner {
                 emit(best, itemNode, bookNodes, steps, nextNode);
                 PiecePlan unit = new PiecePlan(piece, i + 1, count, steps, best.total);
                 units.add(unit);
-                xpNeeded += best.total;
 
                 // Modo simple: ningún paso puede llegar a "¡Demasiado caro!".
                 if (!creative) {
@@ -279,7 +286,12 @@ final class AnvilPlanner {
                         break;
                     }
                 }
-                if (!complete) continue;
+                if (!complete) {
+                    // Los libros de una unidad que no se hace quedan libres para las siguientes.
+                    giveBack(books, needed, chosen);
+                    if (candidate != null && missingBook) withoutBooks++;
+                    continue;
+                }
 
                 initialSlots.put(itemNode.id(), candidate.inv().slot());
                 for (int b = 0; b < n; b++) initialSlots.put(bookNodes[b].id(), chosen.get(b).slot());
@@ -290,44 +302,78 @@ final class AnvilPlanner {
         List<Count> counts = new ArrayList<>(pieceCounts);
         booksNeeded.forEach((key, need) -> counts.add(new Count(Kind.BOOK, key, bookNames.get(key),
                 bookLists.getOrDefault(key, List.of()).size(), need)));
-        if (!creative && xpNeeded > 0) {
-            counts.add(new Count(Kind.XP, XP_KEY, Component.literal("Niveles de XP"),
-                    player.experienceLevel, (int) Math.min(Integer.MAX_VALUE, xpNeeded)));
-            if (xpNeeded > player.experienceLevel) problems.add(xpFailure(units, player.experienceLevel, combineBooks));
+
+        // Antes de empezar solo se exige que haya las piezas y libros para al menos una unidad.
+        // Si hay libros para algunas, se encantan esas y se avisa de las demás. La XP se mira por unidad al ejecutar.
+        List<Component> warnings = new ArrayList<>();
+        boolean piecesOk = pieceCounts.stream().allMatch(Count::ok);
+        if (problems.isEmpty() && piecesOk && withoutBooks > 0) {
+            if (piecePlans.isEmpty()) {
+                problems.add(Component.literal("No hay libros para ninguna unidad."));
+            } else {
+                int all = piecePlans.size() + withoutBooks;
+                warnings.add(Component.literal("Faltan libros para " + withoutBooks + " de " + all + " unidades: se encantan "
+                        + piecePlans.size() + " y se saltan las otras " + withoutBooks + "."));
+            }
         }
 
-        boolean allOk = problems.isEmpty() && counts.stream().allMatch(Count::ok);
-        if (!allOk || piecePlans.isEmpty()) {
-            if (allOk && info.isEmpty()) {
+        boolean ok = problems.isEmpty() && piecesOk;
+        if (!ok || piecePlans.isEmpty()) {
+            if (ok && info.isEmpty()) {
                 info.add(Component.literal("No hay ninguna pieza activa con encantamientos en la config."));
             }
-            return new Result(null, counts, units, problems, info, creative, stock);
+            return new Result(null, counts, units, problems, warnings, info, creative, stock);
         }
         int total = piecePlans.stream().mapToInt(PiecePlan::totalCost).sum();
-        return new Result(new Plan(piecePlans, initialSlots, total), counts, units, problems, info, creative, stock);
+        return new Result(new Plan(piecePlans, initialSlots, total, withoutBooks), counts, units, problems, warnings,
+                info, creative, stock);
+    }
+
+    /** Devuelve al principio de su montón los libros que había cogido una unidad (los de menos penalización). */
+    private static void giveBack(Map<String, Deque<Book>> books, List<Target> needed, List<Book> chosen) {
+        for (int b = 0; b < chosen.size(); b++) {
+            Book book = chosen.get(b);
+            if (book != null) books.get(bookKey(needed.get(b).holder(), needed.get(b).level())).offerFirst(book);
+        }
     }
 
     static String unitName(Piece piece, int index, int count) {
         return piece.fullName() + (count > 1 ? " " + index + "/" + count : "");
     }
 
-    /** Simula los pasos en orden gastando niveles y dice en cuál se acaba la XP. */
-    private static Component xpFailure(List<PiecePlan> units, int level, boolean combineBooks) {
-        int remaining = level;
+    /**
+     * "XP por espada: 15 niveles" (o "XP por unidad: casco 15, espada 9-15 niveles" con varias piezas) y,
+     * en gris y solo como dato, el total y los niveles que tienes. La XP se exige unidad a unidad, no en total.
+     */
+    static Component describeXp(List<PiecePlan> units, int level) {
+        Map<Piece, int[]> ranges = new LinkedHashMap<>();
         for (PiecePlan unit : units) {
-            for (int s = 0; s < unit.steps().size(); s++) {
-                Step step = unit.steps().get(s);
-                if (step.cost() > remaining) {
-                    MutableComponent msg = Component.literal("XP insuficiente: falla " + unitName(unit.piece(), unit.index(),
-                            unit.count()) + ", paso " + (s + 1) + " (").append(step.label())
-                            .append("): cuesta " + step.cost() + " y te quedarían " + remaining + " niveles.");
-                    if (!combineBooks) msg.append(" Prueba a activar \"Combinar libros\".");
-                    return msg;
-                }
-                remaining -= step.cost();
+            int[] r = ranges.computeIfAbsent(unit.piece(), k -> new int[]{Integer.MAX_VALUE, 0});
+            r[0] = Math.min(r[0], unit.totalCost());
+            r[1] = Math.max(r[1], unit.totalCost());
+        }
+        StringBuilder text = new StringBuilder();
+        if (ranges.size() == 1) {
+            var e = ranges.entrySet().iterator().next();
+            text.append("XP por ").append(e.getKey().label.toLowerCase(Locale.ROOT)).append(": ").append(range(e.getValue()));
+        } else {
+            text.append("XP por unidad: ");
+            boolean first = true;
+            for (var e : ranges.entrySet()) {
+                if (!first) text.append(", ");
+                text.append(e.getKey().label.toLowerCase(Locale.ROOT)).append(' ').append(range(e.getValue()));
+                first = false;
             }
         }
-        return Component.literal("XP insuficiente.");
+        text.append(" niveles");
+        int total = units.stream().mapToInt(PiecePlan::totalCost).sum();
+        String extra = units.size() > 1 ? "total " + units.size() + " unidades: " + total + " · " : "";
+        return Component.literal(text.toString()).withStyle(ChatFormatting.GOLD)
+                .append(Component.literal(" (" + extra + "tienes " + level + ")").withStyle(ChatFormatting.GRAY));
+    }
+
+    private static String range(int[] r) {
+        return r[0] == r[1] ? String.valueOf(r[0]) : r[0] + "-" + r[1];
     }
 
     /**
@@ -368,8 +414,8 @@ final class AnvilPlanner {
         }
         if (units.size() > 1) {
             int total = units.stream().mapToInt(PiecePlan::totalCost).sum();
-            lines.add(Component.literal("Total " + units.size() + " unidades: " + total + " niveles")
-                    .withStyle(ChatFormatting.GOLD));
+            lines.add(Component.literal("Total " + units.size() + " unidades: " + total + " niveles (solo informativo)")
+                    .withStyle(ChatFormatting.GRAY));
         }
         return lines;
     }

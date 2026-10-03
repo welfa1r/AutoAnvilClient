@@ -85,31 +85,38 @@ public class AutoAnvilClient implements ClientModInitializer {
 
         AnvilConfig config = AnvilConfig.get();
         AnvilPlanner.Result result = AnvilPlanner.plan(mc.player, AnvilPlanner.fromMenu(menu), config);
+        // Solo bloquean las piezas que faltan, no tener libros para ninguna unidad y los problemas de config.
+        // Libros para parte de las unidades: se encantan esas y se avisa. La XP se comprueba unidad a unidad.
         List<AnvilPlanner.Count> missing = result.missing();
-        if (!result.problems().isEmpty() || !missing.isEmpty()) {
+        if (result.plan() == null && (!result.problems().isEmpty() || !missing.isEmpty())) {
             say(Component.literal("No se hace nada. Falta:").withStyle(ChatFormatting.RED));
-            for (AnvilPlanner.Count c : missing) {
-                say(Component.literal(" - ").append(c.format())
-                        .append(Component.literal(" (faltan " + (c.need() - c.have()) + ")").withStyle(ChatFormatting.RED)));
-            }
+            for (AnvilPlanner.Count c : missing) say(Component.literal(" - ").append(c.formatWithMissing()));
             result.problems().forEach(c -> say(Component.literal(" - ").append(c).withStyle(ChatFormatting.RED)));
         }
         result.info().forEach(c -> say(c.copy().withStyle(ChatFormatting.GRAY)));
         if (result.plan() == null) return;
 
+        result.warnings().forEach(c -> say(c.copy().withStyle(ChatFormatting.YELLOW)));
+        for (AnvilPlanner.Count c : missing) say(Component.literal(" - ").append(c.formatWithMissing()));
+
         AnvilPlanner.Plan plan = result.plan();
         int steps = plan.pieces().stream().mapToInt(p -> p.steps().size()).sum();
         say(Component.literal("Modo " + (config.combineBooks ? "Combinar libros" : "simple") + ". Encantando "
-                + plan.pieces().size() + " pieza(s): " + steps + " usos del yunque, "
-                + plan.totalCost() + " niveles en total.").withStyle(ChatFormatting.AQUA));
+                + plan.pieces().size() + " pieza(s): " + steps + " usos del yunque.").withStyle(ChatFormatting.AQUA));
+        if (!result.creative()) {
+            say(AnvilPlanner.describeXp(plan.pieces(), mc.player.experienceLevel).copy()
+                    .append(Component.literal(config.waitForXp
+                            ? " Si no llega para la siguiente, espera a tenerla."
+                            : " Si no llega para la siguiente, se detiene.").withStyle(ChatFormatting.GRAY)));
+        }
         for (Piece piece : Piece.values()) {
-            List<AnvilPlanner.PiecePlan> units = result.unitsOf(piece);
+            List<AnvilPlanner.PiecePlan> units = plan.pieces().stream().filter(u -> u.piece() == piece).toList();
             if (units.isEmpty()) continue;
             say(Component.literal(piece.fullName() + (units.size() > 1 ? " ×" + units.size() : "") + ":")
                     .withStyle(ChatFormatting.WHITE));
             AnvilPlanner.describeSteps(units, result.creative()).forEach(line -> say(Component.literal("  ").append(line)));
         }
-        running = new AnvilExecutor(plan, menu.containerId, config.clickDelayTicks);
+        running = new AnvilExecutor(plan, menu.containerId, config.clickDelayTicks, config.waitForXp);
     }
 
     static void say(Component message) {
