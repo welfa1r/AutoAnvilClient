@@ -1,0 +1,23 @@
+# Gradle / Loom
+.gradle/
+build/
+out/
+
+# Cliente de desarrollo (mundos, logs, opciones, usuario)
+run/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+
+# Herramientas locales
+.claude/
+CLAUDE.md
+
+# Sistema
+.DS_Store
+Thumbs.db

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "autoanvil",
+  "version": "${version}",
+  "name": "AutoAnvil",
+  "description": "Encanta automáticamente armadura y espada de netherite en el yunque según una config.",
+  "authors": ["Welfarinas"],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["com.welfarinas.autoanvil.AutoAnvilClient"]
+  },
+  "depends": {
+    "fabricloader": ">=0.18.1",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
