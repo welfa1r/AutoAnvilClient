@@ -5,7 +5,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.inventory.AnvilScreen;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.world.inventory.AnvilMenu;
 import net.minecraft.world.inventory.ClickType;
 import net.minecraft.world.item.Item;
@@ -15,9 +14,10 @@ import net.minecraft.world.item.Items;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
-/** Ejecuta un {@link AnvilPlanner.Plan} clic a clic, con un retardo configurable entre clics. */
+/** Ejecuta un plan clic a clic. */
 final class AnvilExecutor {
     private static final int RESULT_TIMEOUT_TICKS = 60;
 
@@ -26,7 +26,6 @@ final class AnvilExecutor {
     private final AnvilPlanner.Plan plan;
     private final int containerId;
     private final int delay;
-    /** Esperar XP: Sí -> sin niveles se queda esperando en vez de parar. */
     private final boolean waitForXp;
     /** Nodo del plan -> casilla del menú donde está ahora. */
     private final Map<Integer, Integer> slotOf;
@@ -37,7 +36,7 @@ final class AnvilExecutor {
     private int cooldown;
     private int waitTicks;
     private List<Integer> emptyBeforeTake = List.of();
-    private int piecesDone;
+    private int done;
     private boolean waitingXp;
     private boolean finished;
 
@@ -58,7 +57,7 @@ final class AnvilExecutor {
         LocalPlayer player = mc.player;
         if (player == null || mc.gameMode == null || !(mc.screen instanceof AnvilScreen)
                 || !(player.containerMenu instanceof AnvilMenu menu) || menu.containerId != containerId) {
-            finish(Component.literal("Se cerró el yunque: proceso cancelado. " + progress()).withStyle(ChatFormatting.RED));
+            finish(Component.literal("Yunque cerrado, cancelado. " + progress()).withStyle(ChatFormatting.RED));
             return;
         }
         if (cooldown > 0) {
@@ -66,25 +65,21 @@ final class AnvilExecutor {
             return;
         }
 
-        AnvilPlanner.PiecePlan piecePlan = plan.pieces().get(pieceIndex);
-        AnvilPlanner.Step step = piecePlan.steps().get(stepIndex);
+        AnvilPlanner.PiecePlan unit = plan.pieces().get(pieceIndex);
+        AnvilPlanner.Step step = unit.steps().get(stepIndex);
         switch (phase) {
             case PICK_LEFT -> {
-                // Antes de cada unidad: niveles para todos sus pasos. Dentro de la unidad: para el siguiente paso.
-                boolean enoughXp = stepIndex == 0
-                        ? hasXp(mc, menu, player, piecePlan.totalCost(), "la siguiente (" + label(piecePlan) + ")")
-                        : hasXp(mc, menu, player, step.cost(), "el siguiente paso");
-                if (!enoughXp) return;
-                pick(mc, menu, step.left(), Phase.DROP_LEFT);
+                // Se comprueba antes de colocar nada, así el yunque queda libre mientras espera.
+                if (hasXp(mc, menu, player, step.cost(), unit, step)) pick(mc, menu, step.left(), Phase.DROP_LEFT);
             }
             case DROP_LEFT -> drop(mc, menu, step.left(), AnvilMenu.INPUT_SLOT, Phase.PICK_RIGHT);
             case PICK_RIGHT -> pick(mc, menu, step.right(), Phase.DROP_RIGHT);
             case DROP_RIGHT -> drop(mc, menu, step.right(), AnvilMenu.ADDITIONAL_SLOT, Phase.WAIT_RESULT);
-            case WAIT_RESULT -> waitResult(mc, menu, player, step);
+            case WAIT_RESULT -> waitResult(mc, menu, player, unit, step);
             case TAKE_RESULT -> {
-                emptyBeforeTake = emptyInventorySlots(menu);
+                emptyBeforeTake = emptySlots(menu);
                 if (emptyBeforeTake.isEmpty()) {
-                    stop(mc, menu, "Inventario lleno: no hay hueco para recoger el resultado.");
+                    stop(mc, menu, "Inventario lleno. " + progress());
                     return;
                 }
                 click(mc, menu, AnvilMenu.RESULT_SLOT, ClickType.QUICK_MOVE);
@@ -92,18 +87,14 @@ final class AnvilExecutor {
                 waitTicks = 0;
                 cooldown = delay;
             }
-            case LOCATE_RESULT -> locateResult(mc, menu, piecePlan, step);
+            case LOCATE_RESULT -> locateResult(mc, menu, unit, step);
         }
     }
 
     private void pick(Minecraft mc, AnvilMenu menu, int node, Phase next) {
         Integer slot = slotOf.get(node);
-        if (slot == null || !menu.getSlot(slot).hasItem()) {
-            stop(mc, menu, "No encuentro en el inventario un objeto que debía usar.");
-            return;
-        }
-        if (!menu.getCarried().isEmpty()) {
-            stop(mc, menu, "El cursor tiene un objeto inesperado.");
+        if (slot == null || !menu.getSlot(slot).hasItem() || !menu.getCarried().isEmpty()) {
+            stop(mc, menu, "Falta un objeto del plan. " + progress());
             return;
         }
         click(mc, menu, slot, ClickType.PICKUP);
@@ -113,7 +104,7 @@ final class AnvilExecutor {
 
     private void drop(Minecraft mc, AnvilMenu menu, int node, int anvilSlot, Phase next) {
         if (menu.getCarried().isEmpty() || menu.getSlot(anvilSlot).hasItem()) {
-            stop(mc, menu, "No se pudo colocar el objeto en el yunque.");
+            stop(mc, menu, "No se pudo colocar el objeto. " + progress());
             return;
         }
         click(mc, menu, anvilSlot, ClickType.PICKUP);
@@ -123,27 +114,27 @@ final class AnvilExecutor {
         cooldown = delay;
     }
 
-    private void waitResult(Minecraft mc, AnvilMenu menu, LocalPlayer player, AnvilPlanner.Step step) {
+    private void waitResult(Minecraft mc, AnvilMenu menu, LocalPlayer player, AnvilPlanner.PiecePlan unit,
+                            AnvilPlanner.Step step) {
         waitTicks++;
         ItemStack result = menu.getSlot(AnvilMenu.RESULT_SLOT).getItem();
         int cost = menu.getCost();
-        // Esperar al menos 2 ticks para que llegue el coste confirmado por el servidor.
+        // Al menos 2 ticks, para que llegue el coste del servidor.
         if (result.isEmpty() || cost <= 0 || waitTicks < 2) {
-            if (waitTicks > RESULT_TIMEOUT_TICKS) {
-                stop(mc, menu, "El yunque no da resultado (¿demasiado caro o bloqueado por el servidor?).");
-            }
+            if (waitTicks > RESULT_TIMEOUT_TICKS) stop(mc, menu, "El yunque no da resultado. " + progress());
             return;
         }
-        if (!hasXp(mc, menu, player, cost, "este paso")) return;
+        // Solo si el coste real supera al previsto. Si se cierra el yunque, el juego devuelve los objetos.
+        if (!hasXp(mc, menu, player, cost, unit, step)) return;
         if (cost != step.cost()) {
-            AutoAnvilClient.say(Component.literal("Aviso: este paso cuesta " + cost + " niveles (previsto "
-                    + step.cost() + ").").withStyle(ChatFormatting.YELLOW));
+            AutoAnvilClient.say(Component.literal("Este paso cuesta " + cost + " niveles, no " + step.cost() + ".")
+                    .withStyle(ChatFormatting.YELLOW));
         }
         phase = Phase.TAKE_RESULT;
     }
 
-    private void locateResult(Minecraft mc, AnvilMenu menu, AnvilPlanner.PiecePlan piecePlan, AnvilPlanner.Step step) {
-        Item expected = step.resultIsBook() ? Items.ENCHANTED_BOOK : piecePlan.piece().item;
+    private void locateResult(Minecraft mc, AnvilMenu menu, AnvilPlanner.PiecePlan unit, AnvilPlanner.Step step) {
+        Item expected = step.resultIsBook() ? Items.ENCHANTED_BOOK : unit.piece().item;
         Integer found = null;
         if (!menu.getSlot(AnvilMenu.RESULT_SLOT).hasItem()) {
             for (int slot : emptyBeforeTake) {
@@ -154,76 +145,68 @@ final class AnvilExecutor {
             }
         }
         if (found == null) {
-            if (++waitTicks > RESULT_TIMEOUT_TICKS) stop(mc, menu, "No se pudo recoger el resultado del yunque.");
+            if (++waitTicks > RESULT_TIMEOUT_TICKS) stop(mc, menu, "No se pudo recoger el resultado. " + progress());
             return;
         }
         slotOf.put(step.result(), found);
-        advance(piecePlan);
+        advance(unit);
     }
 
-    private void advance(AnvilPlanner.PiecePlan piecePlan) {
+    private void advance(AnvilPlanner.PiecePlan unit) {
         phase = Phase.PICK_LEFT;
         cooldown = delay;
-        if (++stepIndex < piecePlan.steps().size()) return;
+        if (++stepIndex < unit.steps().size()) return;
 
-        piecesDone++;
-        AutoAnvilClient.say(Component.literal("✔ " + label(piecePlan) + " lista ("
-                + piecePlan.totalCost() + " niveles). Total: " + piecesDone + "/" + plan.pieces().size())
-                .withStyle(ChatFormatting.GREEN));
+        done++;
         stepIndex = 0;
+        AutoAnvilClient.say(Component.literal(name(unit) + " lista, " + unit.totalCost() + " niveles. "
+                + done + "/" + plan.pieces().size()).withStyle(ChatFormatting.GREEN));
         if (++pieceIndex >= plan.pieces().size()) {
-            finish(Component.literal("Todo encantado: " + piecesDone + " pieza(s)." + booksNote())
-                    .withStyle(ChatFormatting.GREEN));
+            finish(Component.literal("Terminado: " + done + " encantadas." + booksNote()).withStyle(ChatFormatting.GREEN));
         }
     }
 
-    /**
-     * true si hay {@code need} niveles. Si no, con Esperar XP se queda esperando (avisa una vez y sigue sola
-     * cuando los tenga); sin Esperar XP se detiene con el resumen.
-     */
-    private boolean hasXp(Minecraft mc, AnvilMenu menu, LocalPlayer player, int need, String what) {
+    /** Cada paso solo exige su propio coste. Sin niveles espera (Esperar XP: Sí) o se detiene. */
+    private boolean hasXp(Minecraft mc, AnvilMenu menu, LocalPlayer player, int need, AnvilPlanner.PiecePlan unit,
+                          AnvilPlanner.Step step) {
         int level = player.experienceLevel;
         if (player.hasInfiniteMaterials() || need <= level) {
             if (waitingXp) {
                 waitingXp = false;
-                AutoAnvilClient.say(Component.literal("Ya tienes " + level + " niveles: continúa.").withStyle(ChatFormatting.GREEN));
+                AutoAnvilClient.say(Component.literal("XP suficiente, sigo.").withStyle(ChatFormatting.GREEN));
             }
             return true;
         }
-        String detail = "Para " + what + " faltan " + (need - level) + " niveles (tienes " + level + ", necesita " + need + ").";
+        String label = step.label().getString();
+        if (label.startsWith("+ ")) label = label.substring(2);
+        String piece = unit.piece().label.toLowerCase(Locale.ROOT) + (unit.count() > 1 ? " " + unit.index() + "/" + unit.count() : "");
+        String missing = label + " (" + piece + "). Necesita " + need + " niveles, tienes " + level + ".";
         if (!waitForXp) {
-            stopWithSummary(mc, menu, Component.literal(progress() + " " + detail + booksNote()).withStyle(ChatFormatting.RED));
+            stop(mc, menu, progress() + " Sin XP para " + missing + booksNote());
         } else if (!waitingXp) {
             waitingXp = true;
-            AutoAnvilClient.say(Component.literal("Esperando XP. " + progress() + " " + detail
-                    + " Continúa en cuanto los tengas; cierra el yunque para cancelar.").withStyle(ChatFormatting.YELLOW));
+            AutoAnvilClient.say(Component.literal("Esperando XP: " + missing).withStyle(ChatFormatting.YELLOW));
         }
         return false;
     }
 
-    private static String label(AnvilPlanner.PiecePlan p) {
-        return p.piece().fullName() + (p.count() > 1 ? " " + p.index() + "/" + p.count() : "");
+    private static String name(AnvilPlanner.PiecePlan unit) {
+        return AnvilPlanner.unitName(unit.piece(), unit.index(), unit.count());
     }
 
     private String progress() {
-        return "Encantadas " + piecesDone + " de " + plan.pieces().size() + ".";
+        return "Encantadas " + done + " de " + plan.pieces().size() + ".";
     }
 
-    /** " Faltan libros para otras N unidades." si se saltó alguna por falta de libros. */
     private String booksNote() {
         int n = plan.withoutBooks();
-        return n == 0 ? "" : " Faltan libros para otra" + (n == 1 ? " unidad" : "s " + n + " unidades") + ".";
+        return n == 0 ? "" : " Faltan libros para " + n + (n == 1 ? " unidad más." : " unidades más.");
     }
 
-    /** Se detiene, devuelve al inventario lo que pueda y dice cuántas piezas se hicieron. */
-    private void stop(Minecraft mc, AnvilMenu menu, String reason) {
-        stopWithSummary(mc, menu, Component.literal(reason + " Detenido. " + progress()).withStyle(ChatFormatting.RED));
-    }
-
-    private void stopWithSummary(Minecraft mc, AnvilMenu menu, Component summary) {
-        // Devolver al inventario lo que quede en el cursor o en las casillas de entrada.
+    /** Devuelve al inventario lo que haya en el cursor o en el yunque y termina. */
+    private void stop(Minecraft mc, AnvilMenu menu, String message) {
         if (!menu.getCarried().isEmpty()) {
-            List<Integer> empty = emptyInventorySlots(menu);
+            List<Integer> empty = emptySlots(menu);
             if (!empty.isEmpty()) click(mc, menu, empty.getFirst(), ClickType.PICKUP);
         }
         for (int slot : new int[]{AnvilMenu.INPUT_SLOT, AnvilMenu.ADDITIONAL_SLOT}) {
@@ -231,12 +214,8 @@ final class AnvilExecutor {
         }
         boolean leftover = !menu.getCarried().isEmpty() || menu.getSlot(AnvilMenu.INPUT_SLOT).hasItem()
                 || menu.getSlot(AnvilMenu.ADDITIONAL_SLOT).hasItem();
-        MutableComponent message = summary.copy();
-        if (leftover) {
-            message.append(Component.literal(" Quedan objetos en el yunque o el cursor: haz hueco y recógelos.")
-                    .withStyle(ChatFormatting.RED));
-        }
-        finish(message);
+        if (leftover) message += " Quedan objetos en el yunque o el cursor.";
+        finish(Component.literal(message).withStyle(ChatFormatting.RED));
     }
 
     private void finish(Component message) {
@@ -244,7 +223,7 @@ final class AnvilExecutor {
         AutoAnvilClient.say(message);
     }
 
-    private static List<Integer> emptyInventorySlots(AnvilMenu menu) {
+    private static List<Integer> emptySlots(AnvilMenu menu) {
         List<Integer> slots = new ArrayList<>();
         for (int slot = AnvilPlanner.FIRST_INVENTORY_SLOT; slot < menu.slots.size(); slot++) {
             if (!menu.getSlot(slot).hasItem()) slots.add(slot);

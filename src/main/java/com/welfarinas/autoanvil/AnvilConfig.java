@@ -16,7 +16,6 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** Configuración persistente en config/autoanvil.json. */
 public final class AnvilConfig {
     private static final Logger LOGGER = LoggerFactory.getLogger("AutoAnvil");
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -27,33 +26,20 @@ public final class AnvilConfig {
     public static final int MIN_COUNT = 1;
     public static final int MAX_COUNT = 36;
 
-    /** Ticks entre cada clic en el yunque (1 tick = 50 ms). */
     public int clickDelayTicks = 3;
-    /**
-     * Sí: orden más barato (puede juntar libros entre sí). No: libro a libro sobre la pieza,
-     * en el orden de la lista de encantamientos.
-     */
+    /** No: libro a libro en el orden de la lista. */
     public boolean combineBooks = true;
-    /**
-     * Sí: si no hay niveles para la siguiente unidad, espera a tenerlos y sigue sola.
-     * No: se detiene y dice cuántas se encantaron y cuántos niveles faltan.
-     */
     public boolean waitForXp = false;
-    /** Nombre antiguo de {@link #combineBooks}; solo se lee para migrar (Gson no escribe los null). */
+    /** Nombre antiguo de combineBooks, solo para migrar. */
     private Boolean saveXp;
     public Map<String, PieceConfig> pieces = new LinkedHashMap<>();
 
     public static final class PieceConfig {
-        /** Si se encanta esta pieza. No afecta a la cantidad. */
         public boolean enabled = true;
-        /**
-         * Sí: se encantan exactamente {@link #count} unidades. No: todas las de ese tipo que haya en el inventario.
-         * Null solo en JSON antiguos (se migra al cargar).
-         */
+        /** No: todas las del inventario. Null en JSON antiguos. */
         public Boolean useCount = false;
-        /** Cuántas unidades de esta pieza encantar en cada pasada (solo con useCount). */
         public int count = 1;
-        /** id de encantamiento (p. ej. "minecraft:protection") -> nivel. */
+        /** "minecraft:protection" -> nivel. */
         public Map<String, Integer> enchantments = new LinkedHashMap<>();
 
         PieceConfig copy() {
@@ -132,7 +118,7 @@ public final class AnvilConfig {
             PieceConfig pc = piece(piece);
             if (pc.enchantments == null) pc.enchantments = new LinkedHashMap<>();
             pc.count = Math.clamp(pc.count, MIN_COUNT, MAX_COUNT);
-            // JSON de antes de "Usar cantidad": la cantidad siempre era exacta, así que se mantiene así.
+            // Antes de "Usar cantidad" la cantidad siempre era exacta.
             if (pc.useCount == null) {
                 pc.useCount = true;
                 migrated = true;

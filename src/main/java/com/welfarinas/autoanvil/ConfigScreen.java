@@ -28,32 +28,29 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-/** Elige, por pieza, qué encantamientos, a qué nivel y cuántas unidades. Se guarda en config/autoanvil.json. */
 public class ConfigScreen extends Screen {
     private static final int TAB_WIDTH = 64;
     private static final int CELL_WIDTH = 130;
     private static final int GAP = 4;
     private static final int ROW_HEIGHT = 22;
     private static final int GRID_TOP = 72;
+    private static final Component COUNT_LABEL = Component.literal("Cantidad:");
+    private static final String ALL_LABEL = "Todas las del inventario";
+    private static final int COUNTER_REFRESH_TICKS = 10;
 
     private final Screen parent;
     private final AnvilConfig working = AnvilConfig.get().copy();
     private Piece selected = Piece.HELMET;
     private Component status = Component.empty();
     private boolean noWorld;
-    private static final Component COUNT_LABEL = Component.literal("Cantidad:");
-    private static final String ALL_LABEL = "Todas las del inventario";
-    private static final int COUNTER_REFRESH_TICKS = 10;
     private int ticksSinceRefresh;
     private CountBox countBox;
     private Button minusButton;
     private Button plusButton;
     private int countLabelX;
-    private int countLabelWidth;
-    /** Evita que el responder reaccione a los cambios de texto hechos por código. */
+    /** Para que el responder ignore los cambios hechos por código. */
     private boolean updatingCountBox;
     private int gridBottom = GRID_TOP;
-    /** Y de la fila de botones de abajo más alta (las líneas del contador terminan encima). */
     private int buttonsTop;
     private List<Component> counterLines = List.of();
 
@@ -64,8 +61,7 @@ public class ConfigScreen extends Screen {
 
     @Override
     protected void init() {
-        // Pestañas de piezas: ancho según el nombre más largo (sin marcas añadidas que se corten).
-        // Tachada = "Activa: No"; gris = sin encantamientos elegidos.
+        // Tachada: Activa No. Gris: sin encantamientos.
         int tabWidth = TAB_WIDTH;
         for (Piece piece : Piece.values()) tabWidth = Math.max(tabWidth, font.width(piece.label) + 12);
         int tabsWidth = Piece.values().length * (tabWidth + GAP) - GAP;
@@ -75,24 +71,22 @@ public class ConfigScreen extends Screen {
             MutableComponent tabLabel = Component.literal(piece.label);
             if (!pc.enabled) tabLabel.withStyle(ChatFormatting.STRIKETHROUGH, ChatFormatting.GRAY);
             else if (pc.enchantments.isEmpty()) tabLabel.withStyle(ChatFormatting.GRAY);
-            String state = !pc.enabled ? "Activa: No" : pc.enchantments.isEmpty() ? "Sin encantamientos" : "Activa";
+            String state = !pc.enabled ? "desactivada" : pc.enchantments.isEmpty() ? "sin encantamientos" : "activa";
             Button tab = addRenderableWidget(Button.builder(tabLabel, b -> {
                 selected = piece;
                 status = Component.empty();
                 rebuildWidgets();
             }).bounds(x, 22, tabWidth, 20)
-                    .tooltip(Tooltip.create(Component.literal(piece.fullName() + " — " + state)))
+                    .tooltip(Tooltip.create(Component.literal(piece.fullName() + ", " + state)))
                     .build());
             tab.active = piece != selected;
             x += tabWidth + GAP;
         }
 
-        // Opciones de la pieza: Activa | Usar cantidad | [Cantidad: - campo +] | Quitar todos.
-        // "Activa" y "Usar cantidad" son independientes: cada botón solo cambia su propio valor.
+        // Activa | Usar cantidad | Cantidad: - campo + | Quitar todos
         AnvilConfig.PieceConfig pc = working.piece(selected);
         boolean useCount = Boolean.TRUE.equals(pc.useCount);
-        countLabelWidth = font.width(COUNT_LABEL);
-        // El hueco de la cantidad muestra el campo (Sí) o "Todas las del inventario / (N detectadas)" en dos líneas (No).
+        int countLabelWidth = font.width(COUNT_LABEL);
         int countGroupWidth = Math.max(countLabelWidth + 2 + 20 + 2 + 30 + 2 + 20,
                 Math.max(font.width(ALL_LABEL), font.width(detectedLabel(AnvilConfig.MAX_COUNT))));
         int rowWidth = 70 + GAP + 110 + GAP + countGroupWidth + GAP + 80;
@@ -101,30 +95,26 @@ public class ConfigScreen extends Screen {
             pc.enabled = !pc.enabled;
             rebuildWidgets();
         }).bounds(x, 46, 70, 20)
-                .tooltip(Tooltip.create(Component.literal("Si el yunque encanta esta pieza o la ignora. "
-                        + "No cambia la cantidad ni el contador de esta pestaña.")))
+                .tooltip(Tooltip.create(Component.literal("Si se encanta esta pieza o se ignora.")))
                 .build());
         x += 70 + GAP;
         addRenderableWidget(Button.builder(Component.literal("Usar cantidad: " + (useCount ? "Sí" : "No")), b -> {
             setUseCount(selected, !Boolean.TRUE.equals(working.piece(selected).useCount));
             rebuildWidgets();
         }).bounds(x, 46, 110, 20)
-                .tooltip(Tooltip.create(Component.literal("No: se encantan todas las piezas de este tipo que lleves "
-                        + "en el inventario (las 36 casillas; la armadura puesta no cuenta).\n"
-                        + "Sí: se encantan exactamente las unidades del campo Cantidad (1-" + AnvilConfig.MAX_COUNT
-                        + "); si llevas menos, avisa de cuántas faltan.\nNo cambia \"Activa\".")))
+                .tooltip(Tooltip.create(Component.literal("No: todas las del inventario (la armadura puesta no cuenta).\n"
+                        + "Sí: exactamente las del campo Cantidad.")))
                 .build());
         x += 110 + GAP;
 
-        // Cantidad: [-] [campo] [+], solo con "Usar cantidad: Sí". Shift + clic = ±5, rueda = ±1.
         countLabelX = x;
         countBox = null;
         minusButton = null;
         plusButton = null;
         if (useCount) {
             int cx = x + countLabelWidth + 2;
-            Tooltip countTip = Tooltip.create(Component.literal("Cuántas unidades encantar (" + AnvilConfig.MIN_COUNT + "-"
-                    + AnvilConfig.MAX_COUNT + "). Escribe el número, usa - y + (Shift + clic: ±5) o la rueda (±1)."));
+            Tooltip countTip = Tooltip.create(Component.literal(AnvilConfig.MIN_COUNT + "-" + AnvilConfig.MAX_COUNT
+                    + ". Shift + clic: de 5 en 5. También con la rueda o las flechas."));
             minusButton = addRenderableWidget(Button.builder(Component.literal("-"), b -> stepCount(-1))
                     .bounds(cx, 46, 20, 20).tooltip(countTip).build());
             cx += 20 + 2;
@@ -142,17 +132,14 @@ public class ConfigScreen extends Screen {
         x += countGroupWidth + GAP;
 
         addRenderableWidget(Button.builder(Component.literal("Quitar todos"), b -> {
-            // Solo quita encantamientos y pone la cantidad en 1; no toca "Activa" ni "Usar cantidad".
             pc.enchantments.clear();
             applyCount(selected, AnvilConfig.MIN_COUNT);
             status = Component.empty();
             rebuildWidgets();
         }).bounds(x, 46, 80, 20)
-                .tooltip(Tooltip.create(Component.literal("Quita los encantamientos de esta pieza y pone la cantidad "
-                        + "en 1. No cambia \"Activa\" ni \"Usar cantidad\".")))
+                .tooltip(Tooltip.create(Component.literal("Quita los encantamientos y pone la cantidad en 1.")))
                 .build());
 
-        // Cuadrícula de encantamientos aplicables a la pieza.
         List<Holder.Reference<Enchantment>> available = availableEnchantments();
         noWorld = available == null;
         gridBottom = GRID_TOP;
@@ -168,9 +155,9 @@ public class ConfigScreen extends Screen {
                         .bounds(cx, cy, CELL_WIDTH, 20)
                         .tooltip(Tooltip.create(Component.empty().append(holder.value().description())
                                 .withStyle(ChatFormatting.YELLOW)
-                                .append(Component.literal("\nClic: subir nivel (tras el máximo vuelve a —)."
-                                        + (working.combineBooks ? "" : " El número es el orden en modo simple: para"
-                                        + " mandar uno al final, quítalo y vuelve a elegirlo."))
+                                .append(Component.literal("\nClic: sube el nivel. Tras el máximo se quita."
+                                        + (working.combineBooks ? "" : "\nEl número es el orden. Para mandarlo al final,"
+                                        + " quítalo y vuelve a elegirlo."))
                                         .withStyle(ChatFormatting.WHITE))))
                         .build());
             }
@@ -178,8 +165,7 @@ public class ConfigScreen extends Screen {
         }
         counterLines = buildCounters(pc);
 
-        // Combinar libros / esperar XP / retardo / guardar / cancelar. Si no caben en una fila, guardar y cancelar
-        // van en otra debajo.
+        // Si no cabe todo en una fila, Guardar y Cancelar van debajo.
         int bottom = height - 26;
         int optionsWidth = 130 + GAP + 100 + GAP + 100;
         int actionsWidth = 2 * 80 + GAP;
@@ -191,22 +177,17 @@ public class ConfigScreen extends Screen {
             rebuildWidgets();
         }).bounds(x, buttonsTop, 130, 20)
                 .tooltip(Tooltip.create(Component.literal(
-                        "Sí: busca el orden más barato en niveles. Puede juntar libros entre sí antes de "
-                        + "aplicarlos (p. ej. Irrompibilidad + Reparación) y nunca pasa de 39 niveles por paso.\n\n"
-                        + "No (modo simple): pieza + primer libro, el resultado + el siguiente... en el orden de la "
-                        + "lista (el número de cada encantamiento). Nunca junta libros; suele costar más y, con muchos "
-                        + "libros, algún paso puede pasar de 39 niveles.")))
+                        "Sí: el orden más barato. Puede juntar libros entre sí y nunca pasa de 39 niveles por paso.\n"
+                        + "No: un libro tras otro en el orden de la lista. Suele costar más.")))
                 .build());
         x += 130 + GAP;
         addRenderableWidget(Button.builder(Component.literal("Esperar XP: " + (working.waitForXp ? "Sí" : "No")), b -> {
             working.waitForXp = !working.waitForXp;
             rebuildWidgets();
         }).bounds(x, buttonsTop, 100, 20)
-                .tooltip(Tooltip.create(Component.literal(
-                        "La XP se comprueba antes de cada unidad (la suma de sus pasos), no en total.\n\n"
-                        + "Sí: si no tienes niveles para la siguiente, espera a tenerlos y continúa sola. "
-                        + "Cierra el yunque para cancelar.\n\n"
-                        + "No: se detiene y dice cuántas se encantaron y cuántos niveles faltan para la siguiente.")))
+                .tooltip(Tooltip.create(Component.literal("Cada paso se paga en cuanto hay niveles para él.\n"
+                        + "Sí: si no llega para el siguiente paso, espera y sigue.\n"
+                        + "No: se detiene.")))
                 .build());
         x += 100 + GAP;
         addRenderableWidget(Button.builder(Component.literal("Retardo: " + working.clickDelayTicks + " ticks"), b -> {
@@ -214,8 +195,7 @@ public class ConfigScreen extends Screen {
                     ? AnvilConfig.MIN_DELAY : working.clickDelayTicks + 1;
             rebuildWidgets();
         }).bounds(x, buttonsTop, 100, 20)
-                .tooltip(Tooltip.create(Component.literal("Ticks entre clics en el yunque (1 tick = 50 ms). "
-                        + "Ahora: " + working.clickDelayTicks * 50 + " ms.")))
+                .tooltip(Tooltip.create(Component.literal("Entre clics: " + working.clickDelayTicks * 50 + " ms.")))
                 .build());
         x = oneRow ? x + 100 + GAP : (width - actionsWidth) / 2;
         addRenderableWidget(Button.builder(Component.literal("Guardar"), b -> {
@@ -227,14 +207,12 @@ public class ConfigScreen extends Screen {
                 .bounds(x + 80 + GAP, bottom, 80, 20).build());
     }
 
-    /** "(N detectadas)" para "Usar cantidad: No". */
     private static String detectedLabel(int detected) {
         return "(" + detected + (detected == 1 ? " detectada)" : " detectadas)");
     }
 
-    /** Piezas de ese tipo en las 36 casillas del inventario (la armadura puesta no cuenta). */
     private int countInInventory(Piece piece) {
-        if (minecraft == null || minecraft.player == null) return 0;
+        if (minecraft.player == null) return 0;
         int n = 0;
         for (var stack : minecraft.player.getInventory().getNonEquipmentItems()) {
             if (stack.is(piece.item)) n++;
@@ -242,7 +220,6 @@ public class ConfigScreen extends Screen {
         return n;
     }
 
-    /** El contador sigue al inventario aunque la pantalla esté abierta (p. ej. en multijugador). */
     @Override
     public void tick() {
         super.tick();
@@ -252,41 +229,30 @@ public class ConfigScreen extends Screen {
         }
     }
 
-    /**
-     * Líneas bajo la cuadrícula. "Activa" no influye en nada de esto.
-     * - Contador de ESTA pieza (piezas, libros y XP solo para ella), con la cantidad del campo (Usar cantidad: Sí)
-     *   o con todas las del inventario (No), y avisos como "no hay ninguna pieza".
-     * - "Total de todas las piezas" en otra línea si hay más piezas activas.
-     * - Los pasos de yunque y su coste.
-     */
+    /** Contador de esta pieza, avisos, total de todas las piezas activas y pasos. */
     private List<Component> buildCounters(AnvilConfig.PieceConfig pc) {
-        if (minecraft == null || minecraft.player == null) return List.of();
+        if (minecraft.player == null) return List.of();
         List<AnvilPlanner.InvSlot> inventory = AnvilPlanner.fromInventory(minecraft.player.getInventory());
+        int level = minecraft.player.experienceLevel;
 
-        // Solo esta pieza (activa a efectos del cálculo), para no mezclar necesidades de otras.
+        // Se calcula solo esta pieza, aunque esté desactivada.
         AnvilConfig solo = working.copy();
         for (Piece piece : Piece.values()) solo.piece(piece).enabled = piece == selected;
         AnvilPlanner.Result own = AnvilPlanner.plan(minecraft.player, inventory, solo);
         AnvilPlanner.Stock stock = own.stock().get(selected);
 
-        // Contador de la pieza: siempre visible, con "Usar cantidad" en Sí o en No.
         MutableComponent line = Component.empty().append(pieceCounter(pc, stock));
         for (AnvilPlanner.Count c : own.counts()) {
-            if (c.kind() == AnvilPlanner.Kind.PIECE) continue; // ya va en pieceCounter
-            line.append("   ").append(c.formatWithMissing());
+            if (c.kind() == AnvilPlanner.Kind.BOOK) line.append("   ").append(c.formatWithMissing());
         }
-        // XP por unidad (lo que se exige antes de cada una); el total va en gris, solo como dato.
         List<AnvilPlanner.PiecePlan> units = own.unitsOf(selected);
-        if (!own.creative() && !units.isEmpty()) {
-            line.append("   ").append(AnvilPlanner.describeXp(units, minecraft.player.experienceLevel));
-        }
+        if (!own.creative() && !units.isEmpty()) line.append("   ").append(AnvilPlanner.describeXp(units, level));
         if (pc.enchantments.isEmpty()) {
-            line.append(Component.literal("   Sin encantamientos elegidos: no hacen falta libros ni XP.")
-                    .withStyle(ChatFormatting.GRAY));
+            line.append(Component.literal("   Sin encantamientos.").withStyle(ChatFormatting.GRAY));
         }
         List<Component> lines = new ArrayList<>();
         lines.add(line);
-        // Avisos (encantamientos incompatibles, demasiado caro, XP...). El de "no hay ninguna" ya está en el contador.
+        // "No hay ninguna" ya sale en el contador.
         Component none = stock == null ? null : stock.noneProblem();
         own.problems().stream().filter(p -> p != none)
                 .forEach(p -> lines.add(Component.empty().append(p).withStyle(ChatFormatting.RED)));
@@ -297,38 +263,31 @@ public class ConfigScreen extends Screen {
             AnvilConfig.PieceConfig other = working.piece(piece);
             if (piece != selected && other.enabled && !other.enchantments.isEmpty()) othersActive = true;
         }
-        if (othersActive) {
-            lines.add(totalLine(AnvilPlanner.plan(minecraft.player, inventory, working), minecraft.player.experienceLevel));
-        }
+        if (othersActive) lines.add(totalLine(AnvilPlanner.plan(minecraft.player, inventory, working), level));
 
         if (!units.isEmpty()) {
             List<Component> stepLines = AnvilPlanner.describeSteps(units, own.creative());
-            lines.add(Component.literal(working.combineBooks ? "Pasos (Combinar libros): " : "Pasos (simple): ")
+            lines.add(Component.literal(working.combineBooks ? "Pasos (combinar libros): " : "Pasos (simple): ")
                     .withStyle(ChatFormatting.AQUA).append(stepLines.getFirst()));
             lines.addAll(stepLines.subList(1, stepLines.size()));
         }
         return lines;
     }
 
-    /**
-     * "Cascos: 1/3 ✘ (faltan 2)" con Usar cantidad: Sí, o "Cascos: 3/3 ✔" con No (todas las detectadas que
-     * necesitan algo). {@code stock} es null si la pieza no tiene encantamientos elegidos.
-     */
+    /** stock es null si la pieza no tiene encantamientos elegidos. */
     private Component pieceCounter(AnvilConfig.PieceConfig pc, AnvilPlanner.Stock stock) {
         int detected = countInInventory(selected);
         int usable = stock != null ? stock.usable() : detected;
         Component name = Component.literal(selected.plural);
         if (Boolean.TRUE.equals(pc.useCount)) {
-            return new AnvilPlanner.Count(AnvilPlanner.Kind.PIECE, selected.key, name,
-                    Math.min(usable, pc.count), pc.count).formatWithMissing();
+            return new AnvilPlanner.Count(AnvilPlanner.Kind.PIECE, name, Math.min(usable, pc.count), pc.count)
+                    .formatWithMissing();
         }
         if (detected == 0) {
             return Component.empty().append(name).append(": ")
-                    .append(Component.literal("0 detectadas ✘ (no hay ninguna en el inventario)")
-                            .withStyle(ChatFormatting.RED));
+                    .append(Component.literal("ninguna en el inventario").withStyle(ChatFormatting.RED));
         }
-        MutableComponent c = Component.empty().append(new AnvilPlanner.Count(AnvilPlanner.Kind.PIECE, selected.key,
-                name, usable, usable).format());
+        MutableComponent c = Component.empty().append(new AnvilPlanner.Count(AnvilPlanner.Kind.PIECE, name, usable, usable).format());
         if (stock != null && stock.alreadyDone() + stock.incompatible() > 0) {
             StringBuilder extra = new StringBuilder(" (");
             if (stock.alreadyDone() > 0) extra.append(stock.alreadyDone()).append(" ya completas");
@@ -339,25 +298,23 @@ public class ConfigScreen extends Screen {
         return c;
     }
 
-    /** "Total de todas las piezas: ..." con lo que falta (o "todo listo") y la XP por unidad de las piezas activas. */
     private static Component totalLine(AnvilPlanner.Result all, int level) {
-        MutableComponent line = Component.literal("Total de todas las piezas: ").withStyle(ChatFormatting.GOLD);
+        MutableComponent line = Component.literal("Todas las piezas: ").withStyle(ChatFormatting.GOLD);
         List<AnvilPlanner.Count> missing = all.missing();
         if (missing.isEmpty()) {
-            line.append(Component.literal("piezas y libros ✔").withStyle(ChatFormatting.GREEN));
+            line.append(Component.literal("piezas y libros completos").withStyle(ChatFormatting.GREEN));
         } else {
             line.append(Component.literal("faltan ").withStyle(ChatFormatting.RED));
             for (int i = 0; i < missing.size(); i++) {
                 AnvilPlanner.Count c = missing.get(i);
                 if (i > 0) line.append(Component.literal(", ").withStyle(ChatFormatting.RED));
-                line.append(Component.literal((c.need() - c.have()) + "× ").withStyle(ChatFormatting.RED))
-                        .append(c.name());
+                line.append(Component.literal((c.need() - c.have()) + " ").withStyle(ChatFormatting.RED)).append(c.name());
             }
         }
         if (!all.creative() && !all.units().isEmpty()) line.append("   ").append(AnvilPlanner.describeXp(all.units(), level));
         if (!all.problems().isEmpty()) {
             int n = all.problems().size();
-            line.append(Component.literal("   + " + n + (n == 1 ? " aviso" : " avisos") + " (míralos en cada pestaña)")
+            line.append(Component.literal("   " + n + (n == 1 ? " aviso" : " avisos") + " en las pestañas")
                     .withStyle(ChatFormatting.RED));
         }
         return line;
@@ -375,14 +332,12 @@ public class ConfigScreen extends Screen {
         return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
     }
 
-    /** Botones - y +: ±1, o ±5 con Shift. */
     private void stepCount(int direction) {
         boolean shift = InputConstants.isKeyDown(minecraft.getWindow(), GLFW.GLFW_KEY_LEFT_SHIFT)
                 || InputConstants.isKeyDown(minecraft.getWindow(), GLFW.GLFW_KEY_RIGHT_SHIFT);
         setCount(working.piece(selected).count + direction * (shift ? 5 : 1));
     }
 
-    /** Fija la cantidad (ajustada a 1-36), actualiza el campo y la guarda. */
     private void setCount(int count) {
         int clamped = Math.clamp(count, AnvilConfig.MIN_COUNT, AnvilConfig.MAX_COUNT);
         setCountBoxText(clamped);
@@ -390,14 +345,13 @@ public class ConfigScreen extends Screen {
     }
 
     private void onCountTyped(String text) {
-        if (updatingCountBox || text.isEmpty()) return; // vacío: se corrige al salir del campo
-        int typed = Integer.parseInt(text);
-        int clamped = Math.clamp(typed, AnvilConfig.MIN_COUNT, AnvilConfig.MAX_COUNT);
+        // Vacío se corrige al salir del campo.
+        if (updatingCountBox || text.isEmpty()) return;
+        int clamped = Math.clamp(Integer.parseInt(text), AnvilConfig.MIN_COUNT, AnvilConfig.MAX_COUNT);
         if (!text.equals(String.valueOf(clamped))) setCountBoxText(clamped);
         applyCount(selected, clamped);
     }
 
-    /** Al salir del campo o pulsar Enter: si está vacío pasa al valor válido más cercano (1). */
     private void normalizeCount() {
         if (countBox != null) countBox.normalize();
     }
@@ -409,7 +363,7 @@ public class ConfigScreen extends Screen {
         updatingCountBox = false;
     }
 
-    /** "Usar cantidad" se guarda al momento, igual que la cantidad. No toca "Activa" ni la cantidad. */
+    // Usar cantidad y la cantidad se guardan al momento, aunque luego se pulse Cancelar.
     private void setUseCount(Piece piece, boolean useCount) {
         working.piece(piece).useCount = useCount;
         AnvilConfig live = AnvilConfig.get();
@@ -417,7 +371,6 @@ public class ConfigScreen extends Screen {
         live.save();
     }
 
-    /** La cantidad se guarda en el JSON al momento (aunque luego se pulse Cancelar) y refresca el contador. */
     private void applyCount(Piece piece, int count) {
         working.piece(piece).count = count;
         AnvilConfig live = AnvilConfig.get();
@@ -426,9 +379,8 @@ public class ConfigScreen extends Screen {
         counterLines = buildCounters(working.piece(selected));
     }
 
-    /** Campo numérico de la cantidad: corrige el valor al perder el foco o con Enter; flechas = ±1. */
     private final class CountBox extends EditBox {
-        /** Pieza de la pestaña en la que se creó (el foco puede perderse después de cambiar de pestaña). */
+        /** La pestaña donde se creó: el foco puede perderse después de cambiar de pestaña. */
         private final Piece piece;
 
         CountBox(Font font, int x, int y, int width, int height, Piece piece) {
@@ -436,7 +388,6 @@ public class ConfigScreen extends Screen {
             this.piece = piece;
         }
 
-        /** Vacío -> valor válido más cercano (1). */
         void normalize() {
             if (!getValue().isEmpty()) return;
             if (this == countBox) setCountBoxText(AnvilConfig.MIN_COUNT);
@@ -465,7 +416,7 @@ public class ConfigScreen extends Screen {
     }
 
     private List<Holder.Reference<Enchantment>> availableEnchantments() {
-        if (minecraft == null || minecraft.level == null) return null;
+        if (minecraft.level == null) return null;
         Registry<Enchantment> registry = minecraft.level.registryAccess().lookupOrThrow(Registries.ENCHANTMENT);
         return registry.listElements()
                 .filter(h -> !h.is(EnchantmentTags.CURSE))
@@ -478,12 +429,12 @@ public class ConfigScreen extends Screen {
         return holder.key().identifier().toString();
     }
 
-    /** "1. Prot. contra fuego: IV": el nombre se abrevia para que la etiqueta quepa entera en el botón. */
+    /** "1. Prot. contra fuego: IV" */
     private Component cellLabel(Holder.Reference<Enchantment> holder, AnvilConfig.PieceConfig pc, boolean showOrder) {
         int level = pc.enchantments.getOrDefault(id(holder), 0);
         int max = holder.value().getMaxLevel();
         MutableComponent value;
-        if (level <= 0) value = Component.literal("—").withStyle(ChatFormatting.DARK_GRAY);
+        if (level <= 0) value = Component.literal("-").withStyle(ChatFormatting.DARK_GRAY);
         else if (max == 1) value = Component.literal("Sí").withStyle(ChatFormatting.GREEN);
         else value = Component.translatable("enchantment.level." + level).withStyle(ChatFormatting.GREEN);
         MutableComponent label = Component.empty();
@@ -498,10 +449,7 @@ public class ConfigScreen extends Screen {
 
     private static final Set<String> STOP_WORDS = Set.of("el", "la", "los", "las", "de", "del", "the", "of");
 
-    /**
-     * Acorta un nombre hasta que quepa en {@code maxWidth} píxeles: quita artículos, abrevia las palabras más
-     * largas ("Protección" -> "Prot.") y, si aún no cabe, recorta con "…".
-     */
+    /** Quita artículos, abrevia las palabras largas ("Protección" -> "Prot.") y, si aún no cabe, recorta. */
     private String fitName(String name, int maxWidth) {
         if (font.width(name) <= maxWidth) return name;
         List<String> words = new ArrayList<>(List.of(name.split(" ")));
@@ -520,10 +468,10 @@ public class ConfigScreen extends Screen {
             joined = String.join(" ", words);
         }
         if (font.width(joined) <= maxWidth) return joined;
-        while (joined.length() > 1 && font.width(joined + "…") > maxWidth) {
+        while (joined.length() > 1 && font.width(joined + "...") > maxWidth) {
             joined = joined.substring(0, joined.length() - 1);
         }
-        return joined.strip() + "…";
+        return joined.strip() + "...";
     }
 
     private void cycle(Holder.Reference<Enchantment> holder, AnvilConfig.PieceConfig pc) {
@@ -539,15 +487,12 @@ public class ConfigScreen extends Screen {
         rebuildWidgets();
     }
 
-    /** Al elegir un encantamiento se quitan los incompatibles (p. ej. Protección vs Protección contra explosiones). */
     private void removeIncompatible(Holder.Reference<Enchantment> chosen, AnvilConfig.PieceConfig pc) {
-        if (minecraft == null || minecraft.level == null) return;
         Registry<Enchantment> registry = minecraft.level.registryAccess().lookupOrThrow(Registries.ENCHANTMENT);
         MutableComponent removed = null;
         Iterator<Map.Entry<String, Integer>> it = pc.enchantments.entrySet().iterator();
         while (it.hasNext()) {
-            String otherId = it.next().getKey();
-            Identifier parsed = Identifier.tryParse(otherId);
+            Identifier parsed = Identifier.tryParse(it.next().getKey());
             Optional<Holder.Reference<Enchantment>> other = parsed == null ? Optional.empty() : registry.get(parsed);
             if (other.isEmpty() || other.get().equals(chosen)) continue;
             if (!Enchantment.areCompatible(chosen, other.get())) {
@@ -566,7 +511,6 @@ public class ConfigScreen extends Screen {
         if (countBox != null) {
             graphics.drawString(font, COUNT_LABEL, countLabelX, 52, 0xFFFFFFFF);
         } else {
-            // "Usar cantidad: No": se usan todas las del inventario; el número se actualiza en vivo.
             graphics.drawString(font, ALL_LABEL, countLabelX, 46, 0xFFFFFFFF);
             graphics.drawString(font, detectedLabel(countInInventory(selected)), countLabelX, 57, 0xFFAAAAAA);
         }

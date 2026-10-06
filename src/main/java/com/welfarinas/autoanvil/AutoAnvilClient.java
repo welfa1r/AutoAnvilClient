@@ -19,11 +19,6 @@ import org.lwjgl.glfw.GLFW;
 
 import java.util.List;
 
-/**
- * Encanta piezas de netherite en el yunque según la config:
- * - Tecla de config (P por defecto) abre la pantalla para elegir encantamientos por pieza.
- * - Con un yunque abierto, el botón "Auto-encantar" comprueba inventario y XP y hace los pasos.
- */
 public class AutoAnvilClient implements ClientModInitializer {
     private static final KeyMapping.Category CATEGORY =
             KeyMapping.Category.register(Identifier.fromNamespaceAndPath("autoanvil", "main"));
@@ -41,13 +36,12 @@ public class AutoAnvilClient implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(AutoAnvilClient::onTick);
         ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
             if (!(screen instanceof AnvilScreen)) return;
-            // Mismas medidas que el fondo del yunque (176x166), botón encima a la derecha.
+            // Encima del yunque (176x166), a la derecha.
             int left = (scaledWidth - 176) / 2;
             int top = (scaledHeight - 166) / 2;
             Screens.getButtons(screen).add(Button.builder(Component.literal("Auto-encantar"), b -> start(client))
                     .bounds(left + 176 - 100, top - 22, 100, 20)
-                    .tooltip(Tooltip.create(Component.literal(
-                            "Aplica los libros de la config a las piezas de netherite del inventario.")))
+                    .tooltip(Tooltip.create(Component.literal("Aplica los libros de la config a las piezas del inventario.")))
                     .build());
         });
     }
@@ -63,33 +57,31 @@ public class AutoAnvilClient implements ClientModInitializer {
     }
 
     private static void start(Minecraft mc) {
-        // Evita repetir el mismo informe en el chat si se pulsa varias veces seguidas (o se mantiene Enter).
+        // Evita repetir el informe si se pulsa varias veces seguidas o se mantiene Enter.
         long now = System.currentTimeMillis();
         if (now - lastStartMillis < START_COOLDOWN_MS) return;
         lastStartMillis = now;
         if (running != null) {
-            say(Component.literal("Ya hay un proceso en marcha.").withStyle(ChatFormatting.YELLOW));
+            say(Component.literal("Ya está en marcha.").withStyle(ChatFormatting.YELLOW));
             return;
         }
         if (mc.player == null || !(mc.player.containerMenu instanceof AnvilMenu menu)) return;
         if (!menu.getCarried().isEmpty()) {
-            say(Component.literal("Suelta el objeto que llevas en el cursor.").withStyle(ChatFormatting.RED));
+            say(Component.literal("Suelta el objeto del cursor.").withStyle(ChatFormatting.RED));
             return;
         }
         for (int slot = 0; slot <= AnvilMenu.RESULT_SLOT; slot++) {
             if (menu.getSlot(slot).hasItem()) {
-                say(Component.literal("Vacía primero las casillas del yunque.").withStyle(ChatFormatting.RED));
+                say(Component.literal("Vacía el yunque.").withStyle(ChatFormatting.RED));
                 return;
             }
         }
 
         AnvilConfig config = AnvilConfig.get();
         AnvilPlanner.Result result = AnvilPlanner.plan(mc.player, AnvilPlanner.fromMenu(menu), config);
-        // Solo bloquean las piezas que faltan, no tener libros para ninguna unidad y los problemas de config.
-        // Libros para parte de las unidades: se encantan esas y se avisa. La XP se comprueba unidad a unidad.
         List<AnvilPlanner.Count> missing = result.missing();
         if (result.plan() == null && (!result.problems().isEmpty() || !missing.isEmpty())) {
-            say(Component.literal("No se hace nada. Falta:").withStyle(ChatFormatting.RED));
+            say(Component.literal("No se puede empezar:").withStyle(ChatFormatting.RED));
             for (AnvilPlanner.Count c : missing) say(Component.literal(" - ").append(c.formatWithMissing()));
             result.problems().forEach(c -> say(Component.literal(" - ").append(c).withStyle(ChatFormatting.RED)));
         }
@@ -101,18 +93,13 @@ public class AutoAnvilClient implements ClientModInitializer {
 
         AnvilPlanner.Plan plan = result.plan();
         int steps = plan.pieces().stream().mapToInt(p -> p.steps().size()).sum();
-        say(Component.literal("Modo " + (config.combineBooks ? "Combinar libros" : "simple") + ". Encantando "
-                + plan.pieces().size() + " pieza(s): " + steps + " usos del yunque.").withStyle(ChatFormatting.AQUA));
-        if (!result.creative()) {
-            say(AnvilPlanner.describeXp(plan.pieces(), mc.player.experienceLevel).copy()
-                    .append(Component.literal(config.waitForXp
-                            ? " Si no llega para la siguiente, espera a tenerla."
-                            : " Si no llega para la siguiente, se detiene.").withStyle(ChatFormatting.GRAY)));
-        }
+        say(Component.literal("Modo " + (config.combineBooks ? "combinar libros" : "simple") + ": "
+                + plan.pieces().size() + " unidades, " + steps + " pasos.").withStyle(ChatFormatting.AQUA));
+        if (!result.creative()) say(AnvilPlanner.describeXp(plan.pieces(), mc.player.experienceLevel));
         for (Piece piece : Piece.values()) {
             List<AnvilPlanner.PiecePlan> units = plan.pieces().stream().filter(u -> u.piece() == piece).toList();
             if (units.isEmpty()) continue;
-            say(Component.literal(piece.fullName() + (units.size() > 1 ? " ×" + units.size() : "") + ":")
+            say(Component.literal(piece.fullName() + (units.size() > 1 ? " x" + units.size() : "") + ":")
                     .withStyle(ChatFormatting.WHITE));
             AnvilPlanner.describeSteps(units, result.creative()).forEach(line -> say(Component.literal("  ").append(line)));
         }
