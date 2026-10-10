@@ -24,15 +24,17 @@ import java.util.Deque;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+
+import static com.welfarinas.autoanvil.AutoAnvilClient.tr;
 
 /** Busca el orden de yunque más barato para cada pieza. Usa la fórmula de AnvilMenu#createResult (1.21.11). */
 final class AnvilPlanner {
     static final int TOO_EXPENSIVE = 40;
     static final int FIRST_INVENTORY_SLOT = AnvilMenu.RESULT_SLOT + 1;
 
+    /** label: el libro que se aplica a la pieza, o "libro + libro" si se combinan dos libros. */
     record Step(int left, int right, int result, int cost, boolean resultIsBook, Component label) {}
 
     record PiecePlan(Piece piece, int index, int count, List<Step> steps, int totalCost) {}
@@ -48,13 +50,13 @@ final class AnvilPlanner {
         }
 
         Component format() {
-            return Component.empty().append(name).append(": ")
-                    .append(Component.literal(have + "/" + need).withStyle(ok() ? ChatFormatting.GREEN : ChatFormatting.RED));
+            return tr("count", name, Component.literal(have + "/" + need)
+                    .withStyle(ok() ? ChatFormatting.GREEN : ChatFormatting.RED));
         }
 
         Component formatWithMissing() {
             MutableComponent c = Component.empty().append(format());
-            if (!ok()) c.append(Component.literal(" (faltan " + (need - have) + ")").withStyle(ChatFormatting.RED));
+            if (!ok()) c.append(" ").append(tr("count.missing", need - have).withStyle(ChatFormatting.RED));
             return c;
         }
     }
@@ -165,29 +167,25 @@ final class AnvilPlanner {
             candidates.sort(Comparator.<Candidate>comparingInt(c -> c.needed().size())
                     .thenComparingInt(c -> repairCost(c.inv().stack())));
 
-            if (alreadyDone > 0) info.add(Component.literal(piece.plural + ": " + alreadyDone + " ya completas, no cuentan."));
-            if (incompatible > 0) info.add(Component.literal(piece.plural + ": " + incompatible + " incompatibles, no cuentan."));
+            if (alreadyDone > 0) info.add(tr("info.already_done", piece.plural(), alreadyDone));
+            if (incompatible > 0) info.add(tr("info.incompatible", piece.plural(), incompatible));
             stock.put(piece, new Stock(candidates.size(), alreadyDone, incompatible, null));
 
             int count;
             if (Boolean.TRUE.equals(pc.useCount)) {
                 count = pc.count;
-                pieceCounts.add(new Count(Kind.PIECE, Component.literal(piece.plural), Math.min(candidates.size(), count), count));
-                if (candidates.size() < count && equipped) {
-                    info.add(Component.literal(piece.plural + ": la equipada no cuenta."));
-                }
+                pieceCounts.add(new Count(Kind.PIECE, piece.plural(), Math.min(candidates.size(), count), count));
+                if (candidates.size() < count && equipped) info.add(tr("info.equipped", piece.plural()));
             } else {
                 if (found.isEmpty()) {
-                    Component none = Component.literal("No hay " + piece.plural.toLowerCase(Locale.ROOT)
-                            + " de netherite en el inventario"
-                            + (equipped ? " (la equipada no cuenta)." : "."));
+                    Component none = tr(equipped ? "problem.none_equipped" : "problem.none", piece.plural());
                     problems.add(none);
                     stock.put(piece, new Stock(0, alreadyDone, incompatible, none));
                     continue;
                 }
                 count = candidates.size();
                 if (count == 0) continue;
-                pieceCounts.add(new Count(Kind.PIECE, Component.literal(piece.plural + " (todas)"), count, count));
+                pieceCounts.add(new Count(Kind.PIECE, tr("count.all", piece.plural()), count, count));
             }
 
             boolean reportedTooExpensive = false;
@@ -223,15 +221,14 @@ final class AnvilPlanner {
                 Opt best = config.combineBooks ? bestOrder(itemPen, bookPen, bookVal, creative) : inOrder(itemPen, bookPen, bookVal);
                 if (best == null) {
                     if (!reportedTooExpensive) {
-                        problems.add(Component.literal(unitName(piece, i + 1, count)
-                                + ": cualquier orden llega a 40 niveles en algún paso."));
+                        problems.add(tr("problem.no_order", unitName(piece, i + 1, count)));
                         reportedTooExpensive = true;
                     }
                     giveBack(books, needed, chosen);
                     continue;
                 }
 
-                Node itemNode = new Node(nextNode[0]++, Component.literal(piece.label), List.of());
+                Node itemNode = new Node(nextNode[0]++, piece.label(), List.of());
                 Node[] bookNodes = new Node[n];
                 for (int b = 0; b < n; b++) {
                     Component name = bookNames.get(bookKey(needed.get(b).holder(), needed.get(b).level()));
@@ -248,9 +245,8 @@ final class AnvilPlanner {
                         Step step = steps.get(s);
                         if (step.cost() < TOO_EXPENSIVE) continue;
                         if (!reportedTooExpensive) {
-                            problems.add(Component.literal(unitName(piece, i + 1, count) + ", paso " + (s + 1) + " (")
-                                    .append(step.label()).append("): " + step.cost()
-                                    + " niveles, máximo 39. Activa Combinar libros o cambia el orden."));
+                            problems.add(tr("problem.too_expensive", unitName(piece, i + 1, count), s + 1,
+                                    step.label(), step.cost()));
                             reportedTooExpensive = true;
                         }
                         complete = false;
@@ -278,16 +274,15 @@ final class AnvilPlanner {
         boolean piecesOk = pieceCounts.stream().allMatch(Count::ok);
         if (problems.isEmpty() && piecesOk && withoutBooks > 0) {
             if (ready.isEmpty()) {
-                problems.add(Component.literal("No hay libros para ninguna unidad."));
+                problems.add(tr("problem.no_books"));
             } else {
-                warnings.add(Component.literal("Faltan libros para " + withoutBooks + " de "
-                        + (ready.size() + withoutBooks) + " unidades. Se encantan " + ready.size() + "."));
+                warnings.add(tr("warning.missing_books", withoutBooks, ready.size() + withoutBooks, ready.size()));
             }
         }
 
         boolean ok = problems.isEmpty() && piecesOk;
         if (!ok || ready.isEmpty()) {
-            if (ok && info.isEmpty()) info.add(Component.literal("No hay piezas activas con encantamientos."));
+            if (ok && info.isEmpty()) info.add(tr("info.nothing"));
             return new Result(null, counts, units, problems, warnings, info, creative, stock);
         }
         return new Result(new Plan(ready, initialSlots, withoutBooks), counts, units, problems, warnings, info, creative, stock);
@@ -301,8 +296,8 @@ final class AnvilPlanner {
         }
     }
 
-    static String unitName(Piece piece, int index, int count) {
-        return piece.fullName() + (count > 1 ? " " + index + "/" + count : "");
+    static Component unitName(Piece piece, int index, int count) {
+        return count > 1 ? tr("numbered", piece.fullName(), index, count) : piece.fullName();
     }
 
     /** "XP por espada: 15 niveles (total 45, tienes 8)", solo como dato: cada paso se paga por separado. */
@@ -313,23 +308,21 @@ final class AnvilPlanner {
             r[0] = Math.min(r[0], unit.totalCost());
             r[1] = Math.max(r[1], unit.totalCost());
         }
-        StringBuilder text = new StringBuilder("XP por ");
+        MutableComponent text;
         if (ranges.size() == 1) {
             var e = ranges.entrySet().iterator().next();
-            text.append(e.getKey().label.toLowerCase(Locale.ROOT)).append(": ").append(range(e.getValue()));
+            text = tr("xp.piece", e.getKey().lower(), range(e.getValue()));
         } else {
-            text.append("unidad: ");
-            boolean first = true;
+            MutableComponent list = Component.empty();
             for (var e : ranges.entrySet()) {
-                if (!first) text.append(", ");
-                text.append(e.getKey().label.toLowerCase(Locale.ROOT)).append(' ').append(range(e.getValue()));
-                first = false;
+                if (!list.getSiblings().isEmpty()) list.append(", ");
+                list.append(tr("xp.entry", e.getKey().lower(), range(e.getValue())));
             }
+            text = tr("xp.units", list);
         }
-        text.append(" niveles");
         int total = units.stream().mapToInt(PiecePlan::totalCost).sum();
-        String extra = units.size() > 1 ? "total " + total + ", " : "";
-        return Component.literal(text + " (" + extra + "tienes " + level + ")").withStyle(ChatFormatting.GRAY);
+        Component extra = units.size() > 1 ? tr("xp.total", total, level) : tr("xp.have", level);
+        return text.append(" ").append(extra).withStyle(ChatFormatting.GRAY);
     }
 
     private static String range(int[] r) {
@@ -351,28 +344,29 @@ final class AnvilPlanner {
             PiecePlan first = group.getFirst();
             MutableComponent line = Component.empty();
             if (groups.size() > 1) {
-                StringBuilder which = new StringBuilder(group.size() > 1 ? "Unidades " : "Unidad ");
+                StringBuilder which = new StringBuilder();
                 for (int i = 0; i < group.size(); i++) which.append(i > 0 ? ", " : "").append(group.get(i).index());
-                line.append(Component.literal(which + ": ").withStyle(ChatFormatting.GRAY));
+                line.append(tr(group.size() > 1 ? "steps.units" : "steps.unit", which.toString()).withStyle(ChatFormatting.GRAY))
+                        .append(" ");
             }
             for (int s = 0; s < first.steps().size(); s++) {
                 Step step = first.steps().get(s);
                 boolean tooExpensive = !creative && step.cost() >= TOO_EXPENSIVE;
                 if (s > 0) line.append("  ");
-                line.append(Component.literal((s + 1) + ") ").withStyle(ChatFormatting.GRAY))
-                        .append(step.label()).append(": ")
+                line.append(Component.literal((s + 1) + ") ").withStyle(ChatFormatting.GRAY));
+                if (!step.resultIsBook()) line.append("+ ");
+                line.append(step.label()).append(": ")
                         .append(Component.literal(String.valueOf(step.cost()))
                                 .withStyle(tooExpensive ? ChatFormatting.RED : ChatFormatting.YELLOW));
-                if (tooExpensive) line.append(Component.literal(" demasiado caro").withStyle(ChatFormatting.RED));
+                if (tooExpensive) line.append(" ").append(tr("steps.too_expensive").withStyle(ChatFormatting.RED));
             }
-            line.append(Component.literal(" = " + first.totalCost() + " niveles" + (group.size() > 1 ? " cada una" : ""))
+            line.append(" ").append(tr(group.size() > 1 ? "steps.sum_each" : "steps.sum", first.totalCost())
                     .withStyle(ChatFormatting.GOLD));
             lines.add(line);
         }
         if (units.size() > 1) {
             int total = units.stream().mapToInt(PiecePlan::totalCost).sum();
-            lines.add(Component.literal("Total " + units.size() + " unidades: " + total + " niveles")
-                    .withStyle(ChatFormatting.GRAY));
+            lines.add(tr("steps.total", units.size(), total).withStyle(ChatFormatting.GRAY));
         }
         return lines;
     }
@@ -385,19 +379,18 @@ final class AnvilPlanner {
             Identifier id = Identifier.tryParse(e.getKey());
             Optional<Holder.Reference<Enchantment>> holder = id == null ? Optional.empty() : registry.get(id);
             if (holder.isEmpty()) {
-                problems.add(Component.literal(piece.label + ": encantamiento desconocido: " + e.getKey()));
+                problems.add(tr("problem.unknown", piece.label(), e.getKey()));
                 ok = false;
                 continue;
             }
             Enchantment ench = holder.get().value();
             if (!ench.canEnchant(piece.stack())) {
-                problems.add(Component.literal(piece.label + ": ").append(ench.description()).append(" no se puede aplicar."));
+                problems.add(tr("problem.cannot_apply", piece.label(), ench.description()));
                 ok = false;
                 continue;
             }
             if (e.getValue() > ench.getMaxLevel()) {
-                problems.add(Component.literal(piece.label + ": ").append(ench.description())
-                        .append(" llega como máximo a " + ench.getMaxLevel() + "."));
+                problems.add(tr("problem.max_level", piece.label(), ench.description(), ench.getMaxLevel()));
                 ok = false;
                 continue;
             }
@@ -406,9 +399,8 @@ final class AnvilPlanner {
         for (int i = 0; i < targets.size(); i++) {
             for (int j = i + 1; j < targets.size(); j++) {
                 if (!Enchantment.areCompatible(targets.get(i).holder(), targets.get(j).holder())) {
-                    problems.add(Component.literal(piece.label + ": ")
-                            .append(targets.get(i).holder().value().description()).append(" y ")
-                            .append(targets.get(j).holder().value().description()).append(" son incompatibles."));
+                    problems.add(tr("problem.incompatible", piece.label(),
+                            targets.get(i).holder().value().description(), targets.get(j).holder().value().description()));
                     ok = false;
                 }
             }
@@ -541,7 +533,7 @@ final class AnvilPlanner {
         Node right = emit(o.right, item, books, out, nextNode);
         int result = nextNode[0]++;
         Component stepLabel = o.isItem
-                ? Component.literal("+ ").append(right.label())
+                ? right.label()
                 : Component.empty().append(left.label()).append(" + ").append(right.label());
         out.add(new Step(left.id(), right.id(), result, o.stepCost, !o.isItem, stepLabel));
         if (o.isItem) return new Node(result, item.label(), List.of());

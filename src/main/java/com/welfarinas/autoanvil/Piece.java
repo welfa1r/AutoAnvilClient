@@ -1,5 +1,6 @@
 package com.welfarinas.autoanvil;
 
+import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -7,22 +8,18 @@ import net.minecraft.world.item.Items;
 
 /** Las cinco piezas de netherite que sabe encantar el mod. */
 public enum Piece {
-    HELMET("helmet", "Casco", "Cascos", Items.NETHERITE_HELMET, EquipmentSlot.HEAD),
-    CHESTPLATE("chestplate", "Pechera", "Pecheras", Items.NETHERITE_CHESTPLATE, EquipmentSlot.CHEST),
-    LEGGINGS("leggings", "Pantalones", "Pantalones", Items.NETHERITE_LEGGINGS, EquipmentSlot.LEGS),
-    BOOTS("boots", "Botas", "Botas", Items.NETHERITE_BOOTS, EquipmentSlot.FEET),
-    SWORD("sword", "Espada", "Espadas", Items.NETHERITE_SWORD, EquipmentSlot.MAINHAND);
+    HELMET("helmet", Items.NETHERITE_HELMET, EquipmentSlot.HEAD),
+    CHESTPLATE("chestplate", Items.NETHERITE_CHESTPLATE, EquipmentSlot.CHEST),
+    LEGGINGS("leggings", Items.NETHERITE_LEGGINGS, EquipmentSlot.LEGS),
+    BOOTS("boots", Items.NETHERITE_BOOTS, EquipmentSlot.FEET),
+    SWORD("sword", Items.NETHERITE_SWORD, EquipmentSlot.MAINHAND);
 
     public final String key;
-    public final String label;
-    public final String plural;
     public final Item item;
     public final EquipmentSlot equipSlot;
 
-    Piece(String key, String label, String plural, Item item, EquipmentSlot equipSlot) {
+    Piece(String key, Item item, EquipmentSlot equipSlot) {
         this.key = key;
-        this.label = label;
-        this.plural = plural;
         this.item = item;
         this.equipSlot = equipSlot;
     }
@@ -31,7 +28,23 @@ public enum Piece {
         return new ItemStack(item);
     }
 
-    public String fullName() {
-        return label + " de netherite";
+    /** "Casco" */
+    public Component label() {
+        return Component.translatable("autoanvil.piece." + key);
+    }
+
+    /** "Cascos" */
+    public Component plural() {
+        return Component.translatable("autoanvil.piece." + key + ".plural");
+    }
+
+    /** "casco", dentro de una frase. */
+    public Component lower() {
+        return Component.translatable("autoanvil.piece." + key + ".lower");
+    }
+
+    /** "Casco de netherite" */
+    public Component fullName() {
+        return Component.translatable("autoanvil.piece." + key + ".full");
     }
 }

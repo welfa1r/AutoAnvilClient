@@ -13,6 +13,7 @@ import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.inventory.AnvilScreen;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.inventory.AnvilMenu;
 import org.lwjgl.glfw.GLFW;
@@ -39,9 +40,9 @@ public class AutoAnvilClient implements ClientModInitializer {
             // Encima del yunque (176x166), a la derecha.
             int left = (scaledWidth - 176) / 2;
             int top = (scaledHeight - 166) / 2;
-            Screens.getButtons(screen).add(Button.builder(Component.literal("Auto-encantar"), b -> start(client))
+            Screens.getButtons(screen).add(Button.builder(tr("button.start"), b -> start(client))
                     .bounds(left + 176 - 100, top - 22, 100, 20)
-                    .tooltip(Tooltip.create(Component.literal("Aplica los libros de la config a las piezas del inventario.")))
+                    .tooltip(Tooltip.create(tr("button.start.tooltip")))
                     .build());
         });
     }
@@ -62,17 +63,17 @@ public class AutoAnvilClient implements ClientModInitializer {
         if (now - lastStartMillis < START_COOLDOWN_MS) return;
         lastStartMillis = now;
         if (running != null) {
-            say(Component.literal("Ya está en marcha.").withStyle(ChatFormatting.YELLOW));
+            say(tr("chat.running").withStyle(ChatFormatting.YELLOW));
             return;
         }
         if (mc.player == null || !(mc.player.containerMenu instanceof AnvilMenu menu)) return;
         if (!menu.getCarried().isEmpty()) {
-            say(Component.literal("Suelta el objeto del cursor.").withStyle(ChatFormatting.RED));
+            say(tr("chat.cursor").withStyle(ChatFormatting.RED));
             return;
         }
         for (int slot = 0; slot <= AnvilMenu.RESULT_SLOT; slot++) {
             if (menu.getSlot(slot).hasItem()) {
-                say(Component.literal("Vacía el yunque.").withStyle(ChatFormatting.RED));
+                say(tr("chat.anvil_not_empty").withStyle(ChatFormatting.RED));
                 return;
             }
         }
@@ -81,7 +82,7 @@ public class AutoAnvilClient implements ClientModInitializer {
         AnvilPlanner.Result result = AnvilPlanner.plan(mc.player, AnvilPlanner.fromMenu(menu), config);
         List<AnvilPlanner.Count> missing = result.missing();
         if (result.plan() == null && (!result.problems().isEmpty() || !missing.isEmpty())) {
-            say(Component.literal("No se puede empezar:").withStyle(ChatFormatting.RED));
+            say(tr("chat.cannot_start").withStyle(ChatFormatting.RED));
             for (AnvilPlanner.Count c : missing) say(Component.literal(" - ").append(c.formatWithMissing()));
             result.problems().forEach(c -> say(Component.literal(" - ").append(c).withStyle(ChatFormatting.RED)));
         }
@@ -93,17 +94,33 @@ public class AutoAnvilClient implements ClientModInitializer {
 
         AnvilPlanner.Plan plan = result.plan();
         int steps = plan.pieces().stream().mapToInt(p -> p.steps().size()).sum();
-        say(Component.literal("Modo " + (config.combineBooks ? "combinar libros" : "simple") + ": "
-                + plan.pieces().size() + " unidades, " + steps + " pasos.").withStyle(ChatFormatting.AQUA));
+        say(tr(config.combineBooks ? "chat.mode_combine" : "chat.mode_simple", plan.pieces().size(), steps)
+                .withStyle(ChatFormatting.AQUA));
         if (!result.creative()) say(AnvilPlanner.describeXp(plan.pieces(), mc.player.experienceLevel));
         for (Piece piece : Piece.values()) {
             List<AnvilPlanner.PiecePlan> units = plan.pieces().stream().filter(u -> u.piece() == piece).toList();
             if (units.isEmpty()) continue;
-            say(Component.literal(piece.fullName() + (units.size() > 1 ? " x" + units.size() : "") + ":")
+            say((units.size() > 1 ? tr("chat.piece_count", piece.fullName(), units.size()) : tr("chat.piece", piece.fullName()))
                     .withStyle(ChatFormatting.WHITE));
             AnvilPlanner.describeSteps(units, result.creative()).forEach(line -> say(Component.literal("  ").append(line)));
         }
         running = new AnvilExecutor(plan, menu.containerId, config.clickTicks(), config.waitForXp);
+    }
+
+    /** Texto traducible del mod: tr("chat.running") es la clave "autoanvil.chat.running". */
+    static MutableComponent tr(String key, Object... args) {
+        return Component.translatable("autoanvil." + key, args);
+    }
+
+    /** Une frases ya traducidas con un espacio. Ignora las null. */
+    static MutableComponent join(Component... parts) {
+        MutableComponent c = Component.empty();
+        for (Component part : parts) {
+            if (part == null) continue;
+            if (!c.getSiblings().isEmpty()) c.append(" ");
+            c.append(part);
+        }
+        return c;
     }
 
     static void say(Component message) {

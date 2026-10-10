@@ -19,6 +19,13 @@ processResources {
     def version = project.version
     inputs.property "version", version
     filesMatching("fabric.mod.json") { expand "version": version }
+    // El español de cualquier país usa es_es.json; el resto de idiomas cae en en_us.json.
+    ["es_ar", "es_cl", "es_ec", "es_mx", "es_uy", "es_ve"].each { code ->
+        from("src/main/resources/assets/autoanvil/lang/es_es.json") {
+            into "assets/autoanvil/lang"
+            rename { "${code}.json" }
+        }
+    }
 }
 
 tasks.withType(JavaCompile).configureEach {

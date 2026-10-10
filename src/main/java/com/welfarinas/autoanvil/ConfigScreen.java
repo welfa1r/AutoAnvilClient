@@ -12,6 +12,7 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.core.Holder;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.locale.Language;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.resources.Identifier;
@@ -29,14 +30,16 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+import static com.welfarinas.autoanvil.AutoAnvilClient.tr;
+
 public class ConfigScreen extends Screen {
     private static final int TAB_WIDTH = 64;
     private static final int CELL_WIDTH = 130;
     private static final int GAP = 4;
     private static final int ROW_HEIGHT = 22;
     private static final int GRID_TOP = 72;
-    private static final Component COUNT_LABEL = Component.literal("Cantidad:");
-    private static final String ALL_LABEL = "Todas las del inventario";
+    private static final Component COUNT_LABEL = tr("config.count");
+    private static final Component ALL_LABEL = tr("config.all");
     private static final int COUNTER_REFRESH_TICKS = 10;
     private static final int DELAY_FIELD_WIDTH = 50;
     private static final int DELAY_WIDTH = DELAY_FIELD_WIDTH + 2 + 28;
@@ -61,7 +64,7 @@ public class ConfigScreen extends Screen {
     private List<Component> counterLines = List.of();
 
     public ConfigScreen(Screen parent) {
-        super(Component.literal("AutoAnvil - Encantamientos"));
+        super(tr("config.title"));
         this.parent = parent;
     }
 
@@ -69,21 +72,21 @@ public class ConfigScreen extends Screen {
     protected void init() {
         // Tachada: Activa No. Gris: sin encantamientos.
         int tabWidth = TAB_WIDTH;
-        for (Piece piece : Piece.values()) tabWidth = Math.max(tabWidth, font.width(piece.label) + 12);
+        for (Piece piece : Piece.values()) tabWidth = Math.max(tabWidth, font.width(piece.label()) + 12);
         int tabsWidth = Piece.values().length * (tabWidth + GAP) - GAP;
         int x = (width - tabsWidth) / 2;
         for (Piece piece : Piece.values()) {
             AnvilConfig.PieceConfig pc = working.piece(piece);
-            MutableComponent tabLabel = Component.literal(piece.label);
+            MutableComponent tabLabel = piece.label().copy();
             if (!pc.enabled) tabLabel.withStyle(ChatFormatting.STRIKETHROUGH, ChatFormatting.GRAY);
             else if (pc.enchantments.isEmpty()) tabLabel.withStyle(ChatFormatting.GRAY);
-            String state = !pc.enabled ? "desactivada" : pc.enchantments.isEmpty() ? "sin encantamientos" : "activa";
+            String state = !pc.enabled ? "disabled" : pc.enchantments.isEmpty() ? "empty" : "active";
             Button tab = addRenderableWidget(Button.builder(tabLabel, b -> {
                 selected = piece;
                 status = Component.empty();
                 rebuildWidgets();
             }).bounds(x, 22, tabWidth, 20)
-                    .tooltip(Tooltip.create(Component.literal(piece.fullName() + ", " + state)))
+                    .tooltip(Tooltip.create(tr("config.tab", piece.fullName(), tr("config.state." + state))))
                     .build());
             tab.active = piece != selected;
             x += tabWidth + GAP;
@@ -97,19 +100,18 @@ public class ConfigScreen extends Screen {
                 Math.max(font.width(ALL_LABEL), font.width(detectedLabel(AnvilConfig.MAX_COUNT))));
         int rowWidth = 70 + GAP + 110 + GAP + countGroupWidth + GAP + 80;
         x = (width - rowWidth) / 2;
-        addRenderableWidget(Button.builder(Component.literal("Activa: " + (pc.enabled ? "Sí" : "No")), b -> {
+        addRenderableWidget(Button.builder(tr("config.enabled", yesNo(pc.enabled)), b -> {
             pc.enabled = !pc.enabled;
             rebuildWidgets();
         }).bounds(x, 46, 70, 20)
-                .tooltip(Tooltip.create(Component.literal("Si se encanta esta pieza o se ignora.")))
+                .tooltip(Tooltip.create(tr("config.enabled.tooltip")))
                 .build());
         x += 70 + GAP;
-        addRenderableWidget(Button.builder(Component.literal("Usar cantidad: " + (useCount ? "Sí" : "No")), b -> {
+        addRenderableWidget(Button.builder(tr("config.use_count", yesNo(useCount)), b -> {
             setUseCount(selected, !Boolean.TRUE.equals(working.piece(selected).useCount));
             rebuildWidgets();
         }).bounds(x, 46, 110, 20)
-                .tooltip(Tooltip.create(Component.literal("No: todas las del inventario (la armadura puesta no cuenta).\n"
-                        + "Sí: exactamente las del campo Cantidad.")))
+                .tooltip(Tooltip.create(tr("config.use_count.tooltip")))
                 .build());
         x += 110 + GAP;
 
@@ -119,8 +121,7 @@ public class ConfigScreen extends Screen {
         plusButton = null;
         if (useCount) {
             int cx = x + countLabelWidth + 2;
-            Tooltip countTip = Tooltip.create(Component.literal(AnvilConfig.MIN_COUNT + "-" + AnvilConfig.MAX_COUNT
-                    + ". Shift + clic: de 5 en 5. También con la rueda o las flechas."));
+            Tooltip countTip = Tooltip.create(tr("config.count.tooltip", AnvilConfig.MIN_COUNT, AnvilConfig.MAX_COUNT));
             minusButton = addRenderableWidget(Button.builder(Component.literal("-"), b -> stepCount(-1))
                     .bounds(cx, 46, 20, 20).tooltip(countTip).build());
             cx += 20 + 2;
@@ -137,13 +138,13 @@ public class ConfigScreen extends Screen {
         }
         x += countGroupWidth + GAP;
 
-        addRenderableWidget(Button.builder(Component.literal("Quitar todos"), b -> {
+        addRenderableWidget(Button.builder(tr("config.clear"), b -> {
             pc.enchantments.clear();
             applyCount(selected, AnvilConfig.MIN_COUNT);
             status = Component.empty();
             rebuildWidgets();
         }).bounds(x, 46, 80, 20)
-                .tooltip(Tooltip.create(Component.literal("Quita los encantamientos y pone la cantidad en 1.")))
+                .tooltip(Tooltip.create(tr("config.clear.tooltip")))
                 .build());
 
         List<Holder.Reference<Enchantment>> available = availableEnchantments();
@@ -161,10 +162,9 @@ public class ConfigScreen extends Screen {
                         .bounds(cx, cy, CELL_WIDTH, 20)
                         .tooltip(Tooltip.create(Component.empty().append(holder.value().description())
                                 .withStyle(ChatFormatting.YELLOW)
-                                .append(Component.literal("\nClic: sube el nivel. Tras el máximo se quita."
-                                        + (working.combineBooks ? "" : "\nEl número es el orden. Para mandarlo al final,"
-                                        + " quítalo y vuelve a elegirlo."))
-                                        .withStyle(ChatFormatting.WHITE))))
+                                .append("\n").append(tr("config.cell.tooltip").withStyle(ChatFormatting.WHITE))
+                                .append(working.combineBooks ? Component.empty()
+                                        : Component.literal("\n").append(tr("config.cell.order").withStyle(ChatFormatting.WHITE)))))
                         .build());
             }
             gridBottom = GRID_TOP + (available.size() + cols - 1) / cols * ROW_HEIGHT;
@@ -178,28 +178,23 @@ public class ConfigScreen extends Screen {
         boolean oneRow = optionsWidth + GAP + actionsWidth <= width - 8;
         buttonsTop = oneRow ? bottom : bottom - 24;
         x = oneRow ? (width - optionsWidth - GAP - actionsWidth) / 2 : (width - optionsWidth) / 2;
-        addRenderableWidget(Button.builder(Component.literal("Combinar libros: " + (working.combineBooks ? "Sí" : "No")), b -> {
+        addRenderableWidget(Button.builder(tr("config.combine", yesNo(working.combineBooks)), b -> {
             working.combineBooks = !working.combineBooks;
             rebuildWidgets();
         }).bounds(x, buttonsTop, 130, 20)
-                .tooltip(Tooltip.create(Component.literal(
-                        "Sí: el orden más barato. Puede juntar libros entre sí y nunca pasa de 39 niveles por paso.\n"
-                        + "No: un libro tras otro en el orden de la lista. Suele costar más.")))
+                .tooltip(Tooltip.create(tr("config.combine.tooltip")))
                 .build());
         x += 130 + GAP;
-        addRenderableWidget(Button.builder(Component.literal("Esperar XP: " + (working.waitForXp ? "Sí" : "No")), b -> {
+        addRenderableWidget(Button.builder(tr("config.wait_xp", yesNo(working.waitForXp)), b -> {
             working.waitForXp = !working.waitForXp;
             rebuildWidgets();
         }).bounds(x, buttonsTop, 100, 20)
-                .tooltip(Tooltip.create(Component.literal("Cada paso se paga en cuanto hay niveles para él.\n"
-                        + "Sí: si no llega para el siguiente paso, espera y sigue.\n"
-                        + "No: se detiene.")))
+                .tooltip(Tooltip.create(tr("config.wait_xp.tooltip")))
                 .build());
         x += 100 + GAP;
         // Retardo: campo con la cantidad y botón que rota la unidad. Encima, el equivalente en ticks y segundos.
         delayX = x;
-        Tooltip delayTip = Tooltip.create(Component.literal("Retardo entre clics. Admite decimales (1.5). "
-                + "0 es lo más rápido. Máximo 24 h."));
+        Tooltip delayTip = Tooltip.create(tr("config.delay.tooltip"));
         delayBox = new DelayBox(font, x + 1, buttonsTop + 1, DELAY_FIELD_WIDTH - 2, 18);
         delayBox.setMaxLength(10);
         delayBox.setFilter(s -> s.matches("\\d*([.,]\\d*)?"));
@@ -207,28 +202,32 @@ public class ConfigScreen extends Screen {
         delayBox.setResponder(this::onDelayTyped);
         delayBox.setTooltip(delayTip);
         addRenderableWidget(delayBox);
-        addRenderableWidget(Button.builder(Component.literal(working.delayUnit), b -> {
+        addRenderableWidget(Button.builder(tr("unit." + working.delayUnit), b -> {
             normalizeDelay();
             List<String> units = AnvilConfig.UNITS;
             working.delayUnit = units.get((units.indexOf(working.delayUnit) + 1) % units.size());
             working.delayAmount = AnvilConfig.clampAmount(working.delayAmount, working.delayUnit);
             rebuildWidgets();
         }).bounds(x + DELAY_FIELD_WIDTH + 2, buttonsTop, DELAY_WIDTH - DELAY_FIELD_WIDTH - 2, 20)
-                .tooltip(Tooltip.create(Component.literal("Unidad: ms, s, min, h.")))
+                .tooltip(Tooltip.create(tr("config.unit.tooltip")))
                 .build());
         x = oneRow ? x + DELAY_WIDTH + GAP : (width - actionsWidth) / 2;
-        addRenderableWidget(Button.builder(Component.literal("Guardar"), b -> {
+        addRenderableWidget(Button.builder(tr("config.save"), b -> {
             normalizeCount();
             normalizeDelay();
             AnvilConfig.set(working);
             onClose();
         }).bounds(x, bottom, 80, 20).build());
-        addRenderableWidget(Button.builder(Component.literal("Cancelar"), b -> onClose())
+        addRenderableWidget(Button.builder(tr("config.cancel"), b -> onClose())
                 .bounds(x + 80 + GAP, bottom, 80, 20).build());
     }
 
-    private static String detectedLabel(int detected) {
-        return "(" + detected + (detected == 1 ? " detectada)" : " detectadas)");
+    private static Component yesNo(boolean value) {
+        return tr(value ? "yes" : "no");
+    }
+
+    private static Component detectedLabel(int detected) {
+        return detected == 1 ? tr("config.detected.one") : tr("config.detected.many", detected);
     }
 
     private int countInInventory(Piece piece) {
@@ -268,7 +267,7 @@ public class ConfigScreen extends Screen {
         List<AnvilPlanner.PiecePlan> units = own.unitsOf(selected);
         if (!own.creative() && !units.isEmpty()) line.append("   ").append(AnvilPlanner.describeXp(units, level));
         if (pc.enchantments.isEmpty()) {
-            line.append(Component.literal("   Sin encantamientos.").withStyle(ChatFormatting.GRAY));
+            line.append("   ").append(tr("config.no_enchantments").withStyle(ChatFormatting.GRAY));
         }
         List<Component> lines = new ArrayList<>();
         lines.add(line);
@@ -287,8 +286,8 @@ public class ConfigScreen extends Screen {
 
         if (!units.isEmpty()) {
             List<Component> stepLines = AnvilPlanner.describeSteps(units, own.creative());
-            lines.add(Component.literal(working.combineBooks ? "Pasos (combinar libros): " : "Pasos (simple): ")
-                    .withStyle(ChatFormatting.AQUA).append(stepLines.getFirst()));
+            lines.add(tr(working.combineBooks ? "config.steps_combine" : "config.steps_simple").withStyle(ChatFormatting.AQUA)
+                    .append(" ").append(stepLines.getFirst()));
             lines.addAll(stepLines.subList(1, stepLines.size()));
         }
         return lines;
@@ -298,43 +297,42 @@ public class ConfigScreen extends Screen {
     private Component pieceCounter(AnvilConfig.PieceConfig pc, AnvilPlanner.Stock stock) {
         int detected = countInInventory(selected);
         int usable = stock != null ? stock.usable() : detected;
-        Component name = Component.literal(selected.plural);
+        Component name = selected.plural();
         if (Boolean.TRUE.equals(pc.useCount)) {
             return new AnvilPlanner.Count(AnvilPlanner.Kind.PIECE, name, Math.min(usable, pc.count), pc.count)
                     .formatWithMissing();
         }
         if (detected == 0) {
-            return Component.empty().append(name).append(": ")
-                    .append(Component.literal("ninguna en el inventario").withStyle(ChatFormatting.RED));
+            return tr("count", name, tr("config.none").withStyle(ChatFormatting.RED));
         }
         MutableComponent c = Component.empty().append(new AnvilPlanner.Count(AnvilPlanner.Kind.PIECE, name, usable, usable).format());
         if (stock != null && stock.alreadyDone() + stock.incompatible() > 0) {
-            StringBuilder extra = new StringBuilder(" (");
-            if (stock.alreadyDone() > 0) extra.append(stock.alreadyDone()).append(" ya completas");
+            MutableComponent extra = Component.empty();
+            if (stock.alreadyDone() > 0) extra.append(tr("config.extra.done", stock.alreadyDone()));
             if (stock.alreadyDone() > 0 && stock.incompatible() > 0) extra.append(", ");
-            if (stock.incompatible() > 0) extra.append(stock.incompatible()).append(" incompatibles");
-            c.append(Component.literal(extra + ")").withStyle(ChatFormatting.GRAY));
+            if (stock.incompatible() > 0) extra.append(tr("config.extra.incompatible", stock.incompatible()));
+            c.append(" ").append(Component.literal("(").append(extra).append(")").withStyle(ChatFormatting.GRAY));
         }
         return c;
     }
 
     private static Component totalLine(AnvilPlanner.Result all, int level) {
-        MutableComponent line = Component.literal("Todas las piezas: ").withStyle(ChatFormatting.GOLD);
+        MutableComponent line = tr("config.total").withStyle(ChatFormatting.GOLD).append(" ");
         List<AnvilPlanner.Count> missing = all.missing();
         if (missing.isEmpty()) {
-            line.append(Component.literal("piezas y libros completos").withStyle(ChatFormatting.GREEN));
+            line.append(tr("config.total.complete").withStyle(ChatFormatting.GREEN));
         } else {
-            line.append(Component.literal("faltan ").withStyle(ChatFormatting.RED));
-            for (int i = 0; i < missing.size(); i++) {
-                AnvilPlanner.Count c = missing.get(i);
-                if (i > 0) line.append(Component.literal(", ").withStyle(ChatFormatting.RED));
-                line.append(Component.literal((c.need() - c.have()) + " ").withStyle(ChatFormatting.RED)).append(c.name());
+            MutableComponent list = Component.empty();
+            for (AnvilPlanner.Count c : missing) {
+                if (!list.getSiblings().isEmpty()) list.append(", ");
+                list.append(tr("config.total.entry", c.need() - c.have(), c.name()));
             }
+            line.append(tr("config.total.missing", list).withStyle(ChatFormatting.RED));
         }
         if (!all.creative() && !all.units().isEmpty()) line.append("   ").append(AnvilPlanner.describeXp(all.units(), level));
         if (!all.problems().isEmpty()) {
             int n = all.problems().size();
-            line.append(Component.literal("   " + n + (n == 1 ? " aviso" : " avisos") + " en las pestañas")
+            line.append("   ").append((n == 1 ? tr("config.total.warning_one") : tr("config.total.warnings", n))
                     .withStyle(ChatFormatting.RED));
         }
         return line;
@@ -426,16 +424,19 @@ public class ConfigScreen extends Screen {
     }
 
     /** "≈ 3 ticks · 0,15 s", con el aviso de mínimo si baja de un tick. */
-    private String delayInfo() {
+    private Component delayInfo() {
         int ticks = working.clickTicks();
-        String seconds = BigDecimal.valueOf(ticks * AnvilConfig.TICK_MS, 3).stripTrailingZeros().toPlainString().replace('.', ',');
-        return "≈ " + ticks + (ticks == 1 ? " tick" : " ticks") + " · " + seconds + " s"
-                + (working.delayMs() < AnvilConfig.TICK_MS ? " (mínimo)" : "");
+        String separator = Language.getInstance().getOrDefault("autoanvil.decimal_separator", ".");
+        String seconds = BigDecimal.valueOf(ticks * AnvilConfig.TICK_MS, 3).stripTrailingZeros().toPlainString()
+                .replace(".", separator);
+        MutableComponent info = ticks == 1 ? tr("config.delay.one_tick", seconds) : tr("config.delay.ticks", ticks, seconds);
+        if (working.delayMs() < AnvilConfig.TICK_MS) info.append(" ").append(tr("config.delay.minimum"));
+        return info;
     }
 
     private final class DelayBox extends EditBox {
         DelayBox(Font font, int x, int y, int width, int height) {
-            super(font, x, y, width, height, Component.literal("Retardo"));
+            super(font, x, y, width, height, tr("config.delay"));
         }
 
         @Override
@@ -460,7 +461,7 @@ public class ConfigScreen extends Screen {
         private final Piece piece;
 
         CountBox(Font font, int x, int y, int width, int height, Piece piece) {
-            super(font, x, y, width, height, Component.literal("Cantidad"));
+            super(font, x, y, width, height, COUNT_LABEL);
             this.piece = piece;
         }
 
@@ -511,7 +512,7 @@ public class ConfigScreen extends Screen {
         int max = holder.value().getMaxLevel();
         MutableComponent value;
         if (level <= 0) value = Component.literal("-").withStyle(ChatFormatting.DARK_GRAY);
-        else if (max == 1) value = Component.literal("Sí").withStyle(ChatFormatting.GREEN);
+        else if (max == 1) value = tr("yes").withStyle(ChatFormatting.GREEN);
         else value = Component.translatable("enchantment.level." + level).withStyle(ChatFormatting.GREEN);
         MutableComponent label = Component.empty();
         if (showOrder && level > 0) {
@@ -573,11 +574,11 @@ public class ConfigScreen extends Screen {
             if (other.isEmpty() || other.get().equals(chosen)) continue;
             if (!Enchantment.areCompatible(chosen, other.get())) {
                 it.remove();
-                removed = removed == null ? Component.literal("Quitado por incompatible: ") : removed.append(", ");
+                removed = removed == null ? Component.empty() : removed.append(", ");
                 removed.append(other.get().value().description());
             }
         }
-        if (removed != null) status = removed.withStyle(ChatFormatting.YELLOW);
+        if (removed != null) status = tr("config.removed", removed).withStyle(ChatFormatting.YELLOW);
     }
 
     @Override
@@ -591,7 +592,7 @@ public class ConfigScreen extends Screen {
             graphics.drawString(font, detectedLabel(countInInventory(selected)), countLabelX, 57, 0xFFAAAAAA);
         }
         if (noWorld) {
-            graphics.drawCenteredString(font, Component.literal("Entra en un mundo para ver los encantamientos."),
+            graphics.drawCenteredString(font, tr("config.no_world"),
                     width / 2, GRID_TOP + 6, 0xFFFF5555);
         }
         // Texto pequeño encima del retardo.
