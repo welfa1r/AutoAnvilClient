@@ -14,6 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 public final class AnvilConfig {
@@ -21,12 +22,18 @@ public final class AnvilConfig {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final Path FILE = FabricLoader.getInstance().getConfigDir().resolve("autoanvil.json");
 
-    public static final int MIN_DELAY = 1;
-    public static final int MAX_DELAY = 20;
     public static final int MIN_COUNT = 1;
     public static final int MAX_COUNT = 36;
+    public static final List<String> UNITS = List.of("ms", "s", "min", "h");
+    private static final long[] UNIT_MS = {1, 1000, 60_000, 3_600_000};
+    public static final long MAX_DELAY_MS = 24 * 3_600_000L;
+    public static final int TICK_MS = 50;
 
-    public int clickDelayTicks = 3;
+    /** Retardo entre clics, en delayUnit. */
+    public double delayAmount = 150;
+    public String delayUnit = "ms";
+    /** Formato antiguo, en ticks. Se pasa a ms al cargar. */
+    private Integer clickDelayTicks;
     /** No: libro a libro en el orden de la lista. */
     public boolean combineBooks = true;
     public boolean waitForXp = false;
@@ -64,13 +71,33 @@ public final class AnvilConfig {
         config.save();
     }
 
+    public static long unitMs(String unit) {
+        return UNIT_MS[Math.max(0, UNITS.indexOf(unit))];
+    }
+
+    /** Entre 0 y 24 h. NaN o negativo pasa a 0. */
+    public static double clampAmount(double amount, String unit) {
+        double max = (double) MAX_DELAY_MS / unitMs(unit);
+        return amount >= 0 ? Math.min(amount, max) : 0;
+    }
+
+    public long delayMs() {
+        return Math.round(delayAmount * unitMs(delayUnit));
+    }
+
+    /** Ticks entre clics, redondeando hacia arriba. El cliente no puede hacer más de un clic por tick. */
+    public int clickTicks() {
+        return (int) Math.max(1, (delayMs() + TICK_MS - 1) / TICK_MS);
+    }
+
     public PieceConfig piece(Piece piece) {
         return pieces.computeIfAbsent(piece.key, k -> new PieceConfig());
     }
 
     public AnvilConfig copy() {
         AnvilConfig c = new AnvilConfig();
-        c.clickDelayTicks = clickDelayTicks;
+        c.delayAmount = delayAmount;
+        c.delayUnit = delayUnit;
         c.combineBooks = combineBooks;
         c.waitForXp = waitForXp;
         pieces.forEach((k, v) -> c.pieces.put(k, v.copy()));
@@ -113,7 +140,14 @@ public final class AnvilConfig {
             saveXp = null;
             migrated = true;
         }
-        clickDelayTicks = Math.clamp(clickDelayTicks, MIN_DELAY, MAX_DELAY);
+        if (clickDelayTicks != null) {
+            delayAmount = Math.max(0, clickDelayTicks) * TICK_MS;
+            delayUnit = "ms";
+            clickDelayTicks = null;
+            migrated = true;
+        }
+        if (delayUnit == null || !UNITS.contains(delayUnit)) delayUnit = "ms";
+        delayAmount = clampAmount(delayAmount, delayUnit);
         for (Piece piece : Piece.values()) {
             PieceConfig pc = piece(piece);
             if (pc.enchantments == null) pc.enchantments = new LinkedHashMap<>();

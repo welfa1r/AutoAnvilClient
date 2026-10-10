@@ -103,7 +103,7 @@ public class AutoAnvilClient implements ClientModInitializer {
                     .withStyle(ChatFormatting.WHITE));
             AnvilPlanner.describeSteps(units, result.creative()).forEach(line -> say(Component.literal("  ").append(line)));
         }
-        running = new AnvilExecutor(plan, menu.containerId, config.clickDelayTicks, config.waitForXp);
+        running = new AnvilExecutor(plan, menu.containerId, config.clickTicks(), config.waitForXp);
     }
 
     static void say(Component message) {

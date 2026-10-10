@@ -15,7 +15,7 @@ Mod de cliente para **Fabric** (Minecraft **1.21.11**) que automatiza el encanta
 
 - **Cantidad:** encanta varias piezas del mismo tipo de una vez (opcional).
 - **Combinar libros:** con *Sí* busca el orden más barato en XP, juntando libros entre sí y sin pasar de 39 niveles por paso. Con *No* aplica un libro tras otro en el orden de tu lista.
-- **Retardo entre clics:** configurable en ticks (20 ticks = 1 segundo). Recomendado: 6 a 10.
+- **Retardo entre clics:** escribe la cantidad (admite decimales, como `1.5`) y elige la unidad con el botón de al lado: ms, s, min o h. Va de 0 a 24 h. Encima se ve el equivalente en ticks y segundos (por ejemplo `≈ 3 ticks · 0,15 s`). El cliente hace como mucho un clic por tick (50 ms), así que cualquier valor por debajo de 50 ms, incluido 0, equivale al mínimo: un clic por tick. Entre pasos se sigue esperando la respuesta del servidor. En el JSON se guarda como `delayAmount` y `delayUnit`; un `clickDelayTicks` antiguo se pasa solo a ms.
 - **Esperar XP:** con *Sí*, si no tienes niveles para el siguiente paso, espera a tenerlos y sigue. Con *No* hace los pasos que pueda y se detiene en el primero que no puedas pagar.
 - **Coste por paso:** el menú muestra los niveles que costará cada paso y el total antes de empezar.
 

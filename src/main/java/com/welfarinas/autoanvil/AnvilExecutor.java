@@ -17,14 +17,18 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-/** Ejecuta un plan clic a clic. */
+/**
+ * Ejecuta un plan solo con Shift + clic, sin usar el cursor. Desde el inventario, el objeto va a la primera
+ * ranura libre del yunque: por eso se pone primero el de la izquierda y luego el de la derecha.
+ */
 final class AnvilExecutor {
     private static final int RESULT_TIMEOUT_TICKS = 60;
 
-    private enum Phase { PICK_LEFT, DROP_LEFT, PICK_RIGHT, DROP_RIGHT, WAIT_RESULT, TAKE_RESULT, LOCATE_RESULT }
+    private enum Phase { PLACE_LEFT, CHECK_LEFT, CHECK_RIGHT, WAIT_RESULT, TAKE_RESULT, LOCATE_RESULT }
 
     private final AnvilPlanner.Plan plan;
     private final int containerId;
+    /** Ticks sin hacer nada tras cada clic. */
     private final int delay;
     private final boolean waitForXp;
     /** Nodo del plan -> casilla del menú donde está ahora. */
@@ -32,18 +36,19 @@ final class AnvilExecutor {
 
     private int pieceIndex;
     private int stepIndex;
-    private Phase phase = Phase.PICK_LEFT;
+    private Phase phase = Phase.PLACE_LEFT;
     private int cooldown;
     private int waitTicks;
+    private ItemStack moved = ItemStack.EMPTY;
     private List<Integer> emptyBeforeTake = List.of();
     private int done;
     private boolean waitingXp;
     private boolean finished;
 
-    AnvilExecutor(AnvilPlanner.Plan plan, int containerId, int delay, boolean waitForXp) {
+    AnvilExecutor(AnvilPlanner.Plan plan, int containerId, int clickTicks, boolean waitForXp) {
         this.plan = plan;
         this.containerId = containerId;
-        this.delay = delay;
+        this.delay = clickTicks - 1;
         this.waitForXp = waitForXp;
         this.slotOf = new HashMap<>(plan.initialSlots());
     }
@@ -68,13 +73,26 @@ final class AnvilExecutor {
         AnvilPlanner.PiecePlan unit = plan.pieces().get(pieceIndex);
         AnvilPlanner.Step step = unit.steps().get(stepIndex);
         switch (phase) {
-            case PICK_LEFT -> {
-                // Se comprueba antes de colocar nada, así el yunque queda libre mientras espera.
-                if (hasXp(mc, menu, player, step.cost(), unit, step)) pick(mc, menu, step.left(), Phase.DROP_LEFT);
+            case PLACE_LEFT -> {
+                // La XP se mira antes de poner nada, así el yunque queda libre mientras espera.
+                if (!hasXp(mc, menu, player, step.cost(), unit, step)) return;
+                if (menu.getSlot(AnvilMenu.INPUT_SLOT).hasItem() || menu.getSlot(AnvilMenu.ADDITIONAL_SLOT).hasItem()) {
+                    stop(mc, menu, "El yunque no está vacío. " + progress());
+                    return;
+                }
+                place(mc, menu, step.left(), Phase.CHECK_LEFT);
             }
-            case DROP_LEFT -> drop(mc, menu, step.left(), AnvilMenu.INPUT_SLOT, Phase.PICK_RIGHT);
-            case PICK_RIGHT -> pick(mc, menu, step.right(), Phase.DROP_RIGHT);
-            case DROP_RIGHT -> drop(mc, menu, step.right(), AnvilMenu.ADDITIONAL_SLOT, Phase.WAIT_RESULT);
+            // La comprobación va en el mismo tick que la acción siguiente, para no alargar el retardo.
+            case CHECK_LEFT -> {
+                if (check(mc, menu, step.left(), AnvilMenu.INPUT_SLOT, "izquierda", Phase.CHECK_RIGHT)) {
+                    place(mc, menu, step.right(), Phase.CHECK_RIGHT);
+                }
+            }
+            case CHECK_RIGHT -> {
+                if (check(mc, menu, step.right(), AnvilMenu.ADDITIONAL_SLOT, "derecha", Phase.WAIT_RESULT)) {
+                    waitResult(mc, menu, player, unit, step);
+                }
+            }
             case WAIT_RESULT -> waitResult(mc, menu, player, unit, step);
             case TAKE_RESULT -> {
                 emptyBeforeTake = emptySlots(menu);
@@ -82,7 +100,7 @@ final class AnvilExecutor {
                     stop(mc, menu, "Inventario lleno. " + progress());
                     return;
                 }
-                click(mc, menu, AnvilMenu.RESULT_SLOT, ClickType.QUICK_MOVE);
+                click(mc, menu, AnvilMenu.RESULT_SLOT);
                 phase = Phase.LOCATE_RESULT;
                 waitTicks = 0;
                 cooldown = delay;
@@ -91,27 +109,29 @@ final class AnvilExecutor {
         }
     }
 
-    private void pick(Minecraft mc, AnvilMenu menu, int node, Phase next) {
+    private void place(Minecraft mc, AnvilMenu menu, int node, Phase next) {
         Integer slot = slotOf.get(node);
-        if (slot == null || !menu.getSlot(slot).hasItem() || !menu.getCarried().isEmpty()) {
+        if (slot == null || !menu.getSlot(slot).hasItem()) {
             stop(mc, menu, "Falta un objeto del plan. " + progress());
             return;
         }
-        click(mc, menu, slot, ClickType.PICKUP);
+        moved = menu.getSlot(slot).getItem().copy();
+        click(mc, menu, slot);
         phase = next;
         cooldown = delay;
     }
 
-    private void drop(Minecraft mc, AnvilMenu menu, int node, int anvilSlot, Phase next) {
-        if (menu.getCarried().isEmpty() || menu.getSlot(anvilSlot).hasItem()) {
-            stop(mc, menu, "No se pudo colocar el objeto. " + progress());
-            return;
+    /** Tras el Shift + clic, el objeto tiene que estar en su ranura del yunque y haber salido del inventario. */
+    private boolean check(Minecraft mc, AnvilMenu menu, int node, int anvilSlot, String side, Phase next) {
+        ItemStack inAnvil = menu.getSlot(anvilSlot).getItem();
+        if (!ItemStack.isSameItemSameComponents(inAnvil, moved) || menu.getSlot(slotOf.get(node)).hasItem()) {
+            stop(mc, menu, moved.getHoverName().getString() + " no llegó a la ranura " + side + ". " + progress());
+            return false;
         }
-        click(mc, menu, anvilSlot, ClickType.PICKUP);
         slotOf.remove(node);
         phase = next;
         waitTicks = 0;
-        cooldown = delay;
+        return true;
     }
 
     private void waitResult(Minecraft mc, AnvilMenu menu, LocalPlayer player, AnvilPlanner.PiecePlan unit,
@@ -145,7 +165,7 @@ final class AnvilExecutor {
             }
         }
         if (found == null) {
-            if (++waitTicks > RESULT_TIMEOUT_TICKS) stop(mc, menu, "No se pudo recoger el resultado. " + progress());
+            if (++waitTicks > RESULT_TIMEOUT_TICKS) stop(mc, menu, "El resultado no llegó al inventario. " + progress());
             return;
         }
         slotOf.put(step.result(), found);
@@ -153,8 +173,8 @@ final class AnvilExecutor {
     }
 
     private void advance(AnvilPlanner.PiecePlan unit) {
-        phase = Phase.PICK_LEFT;
-        cooldown = delay;
+        // Sin cooldown: ya se esperó después de recoger el resultado.
+        phase = Phase.PLACE_LEFT;
         if (++stepIndex < unit.steps().size()) return;
 
         done++;
@@ -203,18 +223,15 @@ final class AnvilExecutor {
         return n == 0 ? "" : " Faltan libros para " + n + (n == 1 ? " unidad más." : " unidades más.");
     }
 
-    /** Devuelve al inventario lo que haya en el cursor o en el yunque y termina. */
+    /** Devuelve al inventario lo que quede en el yunque y termina. */
     private void stop(Minecraft mc, AnvilMenu menu, String message) {
-        if (!menu.getCarried().isEmpty()) {
-            List<Integer> empty = emptySlots(menu);
-            if (!empty.isEmpty()) click(mc, menu, empty.getFirst(), ClickType.PICKUP);
-        }
         for (int slot : new int[]{AnvilMenu.INPUT_SLOT, AnvilMenu.ADDITIONAL_SLOT}) {
-            if (menu.getSlot(slot).hasItem()) click(mc, menu, slot, ClickType.QUICK_MOVE);
+            if (menu.getSlot(slot).hasItem()) click(mc, menu, slot);
         }
-        boolean leftover = !menu.getCarried().isEmpty() || menu.getSlot(AnvilMenu.INPUT_SLOT).hasItem()
-                || menu.getSlot(AnvilMenu.ADDITIONAL_SLOT).hasItem();
-        if (leftover) message += " Quedan objetos en el yunque o el cursor.";
+        if (menu.getSlot(AnvilMenu.INPUT_SLOT).hasItem() || menu.getSlot(AnvilMenu.ADDITIONAL_SLOT).hasItem()) {
+            message += " Quedan objetos en el yunque.";
+        }
+        if (!menu.getCarried().isEmpty()) message += " Hay un objeto en el cursor.";
         finish(Component.literal(message).withStyle(ChatFormatting.RED));
     }
 
@@ -231,7 +248,7 @@ final class AnvilExecutor {
         return slots;
     }
 
-    private static void click(Minecraft mc, AnvilMenu menu, int slot, ClickType type) {
-        mc.gameMode.handleInventoryMouseClick(menu.containerId, slot, 0, type, mc.player);
+    private static void click(Minecraft mc, AnvilMenu menu, int slot) {
+        mc.gameMode.handleInventoryMouseClick(menu.containerId, slot, 0, ClickType.QUICK_MOVE, mc.player);
     }
 }

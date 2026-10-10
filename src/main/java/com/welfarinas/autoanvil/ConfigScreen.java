@@ -20,6 +20,7 @@ import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.world.item.enchantment.Enchantment;
 import org.lwjgl.glfw.GLFW;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Iterator;
@@ -37,6 +38,8 @@ public class ConfigScreen extends Screen {
     private static final Component COUNT_LABEL = Component.literal("Cantidad:");
     private static final String ALL_LABEL = "Todas las del inventario";
     private static final int COUNTER_REFRESH_TICKS = 10;
+    private static final int DELAY_FIELD_WIDTH = 50;
+    private static final int DELAY_WIDTH = DELAY_FIELD_WIDTH + 2 + 28;
 
     private final Screen parent;
     private final AnvilConfig working = AnvilConfig.get().copy();
@@ -52,6 +55,9 @@ public class ConfigScreen extends Screen {
     private boolean updatingCountBox;
     private int gridBottom = GRID_TOP;
     private int buttonsTop;
+    private DelayBox delayBox;
+    private boolean updatingDelayBox;
+    private int delayX;
     private List<Component> counterLines = List.of();
 
     public ConfigScreen(Screen parent) {
@@ -167,7 +173,7 @@ public class ConfigScreen extends Screen {
 
         // Si no cabe todo en una fila, Guardar y Cancelar van debajo.
         int bottom = height - 26;
-        int optionsWidth = 130 + GAP + 100 + GAP + 100;
+        int optionsWidth = 130 + GAP + 100 + GAP + DELAY_WIDTH;
         int actionsWidth = 2 * 80 + GAP;
         boolean oneRow = optionsWidth + GAP + actionsWidth <= width - 8;
         buttonsTop = oneRow ? bottom : bottom - 24;
@@ -190,16 +196,30 @@ public class ConfigScreen extends Screen {
                         + "No: se detiene.")))
                 .build());
         x += 100 + GAP;
-        addRenderableWidget(Button.builder(Component.literal("Retardo: " + working.clickDelayTicks + " ticks"), b -> {
-            working.clickDelayTicks = working.clickDelayTicks >= AnvilConfig.MAX_DELAY
-                    ? AnvilConfig.MIN_DELAY : working.clickDelayTicks + 1;
+        // Retardo: campo con la cantidad y botón que rota la unidad. Encima, el equivalente en ticks y segundos.
+        delayX = x;
+        Tooltip delayTip = Tooltip.create(Component.literal("Retardo entre clics. Admite decimales (1.5). "
+                + "0 es lo más rápido. Máximo 24 h."));
+        delayBox = new DelayBox(font, x + 1, buttonsTop + 1, DELAY_FIELD_WIDTH - 2, 18);
+        delayBox.setMaxLength(10);
+        delayBox.setFilter(s -> s.matches("\\d*([.,]\\d*)?"));
+        delayBox.setValue(formatAmount(working.delayAmount));
+        delayBox.setResponder(this::onDelayTyped);
+        delayBox.setTooltip(delayTip);
+        addRenderableWidget(delayBox);
+        addRenderableWidget(Button.builder(Component.literal(working.delayUnit), b -> {
+            normalizeDelay();
+            List<String> units = AnvilConfig.UNITS;
+            working.delayUnit = units.get((units.indexOf(working.delayUnit) + 1) % units.size());
+            working.delayAmount = AnvilConfig.clampAmount(working.delayAmount, working.delayUnit);
             rebuildWidgets();
-        }).bounds(x, buttonsTop, 100, 20)
-                .tooltip(Tooltip.create(Component.literal("Entre clics: " + working.clickDelayTicks * 50 + " ms.")))
+        }).bounds(x + DELAY_FIELD_WIDTH + 2, buttonsTop, DELAY_WIDTH - DELAY_FIELD_WIDTH - 2, 20)
+                .tooltip(Tooltip.create(Component.literal("Unidad: ms, s, min, h.")))
                 .build());
-        x = oneRow ? x + 100 + GAP : (width - actionsWidth) / 2;
+        x = oneRow ? x + DELAY_WIDTH + GAP : (width - actionsWidth) / 2;
         addRenderableWidget(Button.builder(Component.literal("Guardar"), b -> {
             normalizeCount();
+            normalizeDelay();
             AnvilConfig.set(working);
             onClose();
         }).bounds(x, bottom, 80, 20).build());
@@ -379,6 +399,62 @@ public class ConfigScreen extends Screen {
         counterLines = buildCounters(working.piece(selected));
     }
 
+    private static String formatAmount(double amount) {
+        return BigDecimal.valueOf(amount).stripTrailingZeros().toPlainString();
+    }
+
+    private void onDelayTyped(String text) {
+        // Vacío o "." a medias se corrigen al salir del campo.
+        if (updatingDelayBox || !text.matches(".*\\d.*")) return;
+        double typed = Double.parseDouble(text.replace(',', '.'));
+        double clamped = AnvilConfig.clampAmount(typed, working.delayUnit);
+        if (clamped != typed) setDelayText(clamped);
+        working.delayAmount = clamped;
+    }
+
+    /** Vacío o no válido pasa a 0. */
+    private void normalizeDelay() {
+        if (delayBox == null || delayBox.getValue().matches(".*\\d.*")) return;
+        setDelayText(0);
+        working.delayAmount = 0;
+    }
+
+    private void setDelayText(double amount) {
+        updatingDelayBox = true;
+        delayBox.setValue(formatAmount(amount));
+        updatingDelayBox = false;
+    }
+
+    /** "≈ 3 ticks · 0,15 s", con el aviso de mínimo si baja de un tick. */
+    private String delayInfo() {
+        int ticks = working.clickTicks();
+        String seconds = BigDecimal.valueOf(ticks * AnvilConfig.TICK_MS, 3).stripTrailingZeros().toPlainString().replace('.', ',');
+        return "≈ " + ticks + (ticks == 1 ? " tick" : " ticks") + " · " + seconds + " s"
+                + (working.delayMs() < AnvilConfig.TICK_MS ? " (mínimo)" : "");
+    }
+
+    private final class DelayBox extends EditBox {
+        DelayBox(Font font, int x, int y, int width, int height) {
+            super(font, x, y, width, height, Component.literal("Retardo"));
+        }
+
+        @Override
+        public void setFocused(boolean focused) {
+            boolean wasFocused = isFocused();
+            super.setFocused(focused);
+            if (wasFocused && !focused) normalizeDelay();
+        }
+
+        @Override
+        public boolean keyPressed(KeyEvent event) {
+            if (event.isConfirmation()) {
+                normalizeDelay();
+                return true;
+            }
+            return super.keyPressed(event);
+        }
+    }
+
     private final class CountBox extends EditBox {
         /** La pestaña donde se creó: el foco puede perderse después de cambiar de pestaña. */
         private final Piece piece;
@@ -518,8 +594,15 @@ public class ConfigScreen extends Screen {
             graphics.drawCenteredString(font, Component.literal("Entra en un mundo para ver los encantamientos."),
                     width / 2, GRID_TOP + 6, 0xFFFF5555);
         }
+        // Texto pequeño encima del retardo.
+        graphics.pose().pushMatrix();
+        graphics.pose().translate(delayX, buttonsTop - 8);
+        graphics.pose().scale(0.75f, 0.75f);
+        graphics.drawString(font, delayInfo(), 0, 0, 0xFFAAAAAA);
+        graphics.pose().popMatrix();
+
         boolean hasStatus = !status.getString().isEmpty();
-        int maxY = buttonsTop - 2 - (hasStatus ? 12 : 0) - font.lineHeight;
+        int maxY = buttonsTop - 12 - (hasStatus ? 12 : 0) - font.lineHeight;
         int y = gridBottom + 4;
         outer:
         for (Component line : counterLines) {
@@ -529,7 +612,7 @@ public class ConfigScreen extends Screen {
                 y += font.lineHeight + 1;
             }
         }
-        if (hasStatus) graphics.drawCenteredString(font, status, width / 2, buttonsTop - 12, 0xFFFFFF55);
+        if (hasStatus) graphics.drawCenteredString(font, status, width / 2, buttonsTop - 22, 0xFFFFFF55);
     }
 
     @Override
